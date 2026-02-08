@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.database import get_db
 from services import document_service
 from services import vector_store
+from services import rag_service
 
 
 class SearchRequest(BaseModel):
@@ -17,6 +18,12 @@ class SearchRequest(BaseModel):
     query: str
     k: int = 5
     score_threshold: Optional[float] = None
+
+
+class QueryRequest(BaseModel):
+    """Request body for RAG query endpoints."""
+    query: str
+    k: int = 5  # Number of chunks to retrieve for context
 
 router = APIRouter(
     prefix="/documents",
@@ -178,3 +185,77 @@ async def search_document(
         }
         for r in results
     ]
+
+
+@router.post("/query", response_model=dict)
+async def query_all_documents(
+    request: QueryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ask a question across all documents using RAG.
+
+    - **query**: Your question
+    - **k**: Number of context chunks to use (default: 5)
+
+    Returns an AI-generated answer with source citations.
+    """
+    response = await rag_service.query_documents(
+        query=request.query,
+        db=db,
+        k=request.k
+    )
+
+    return {
+        "answer": response.answer,
+        "sources": [
+            {
+                "chunk_index": s.chunk_index,
+                "content": s.content,
+                "score": s.score,
+                "document_id": str(s.document_id)
+            }
+            for s in response.sources
+        ]
+    }
+
+
+@router.post("/{document_id}/query", response_model=dict)
+async def query_document(
+    document_id: UUID,
+    request: QueryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ask a question about a specific document using RAG.
+
+    - **document_id**: UUID of the document to query
+    - **query**: Your question
+    - **k**: Number of context chunks to use (default: 5)
+
+    Returns an AI-generated answer with source citations.
+    """
+    # Verify document exists
+    document = await document_service.get_document_by_id(document_id, db)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    response = await rag_service.query_documents(
+        query=request.query,
+        db=db,
+        document_id=document_id,
+        k=request.k
+    )
+
+    return {
+        "answer": response.answer,
+        "sources": [
+            {
+                "chunk_index": s.chunk_index,
+                "content": s.content,
+                "score": s.score,
+                "document_id": str(s.document_id)
+            }
+            for s in response.sources
+        ]
+    }
