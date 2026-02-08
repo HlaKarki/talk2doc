@@ -18,6 +18,12 @@ class SearchRequest(BaseModel):
     entity_type: Optional[str] = None
 
 
+class SubgraphRequest(BaseModel):
+    """Request body for subgraph extraction."""
+    node_ids: List[UUID]
+    include_connections: bool = True
+
+
 router = APIRouter(
     prefix="/kg",
     tags=["knowledge-graph"],
@@ -127,3 +133,90 @@ async def search_entities(
     )
 
     return results
+
+
+@router.get("/nodes/{node_id}/neighbors", response_model=dict)
+async def get_node_neighbors(
+    node_id: UUID,
+    depth: int = 1,
+    direction: str = "both",
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get neighboring nodes connected to a specific node.
+
+    - **node_id**: The node to find neighbors for
+    - **depth**: How many hops to traverse (1 = immediate neighbors, default: 1)
+    - **direction**: "in" (incoming edges), "out" (outgoing), or "both" (default)
+    """
+    if depth < 1 or depth > 5:
+        raise HTTPException(status_code=400, detail="Depth must be between 1 and 5")
+
+    if direction not in ("in", "out", "both"):
+        raise HTTPException(status_code=400, detail="Direction must be 'in', 'out', or 'both'")
+
+    result = await knowledge_graph_service.get_node_neighbors(
+        node_id=node_id,
+        db=db,
+        depth=depth,
+        direction=direction
+    )
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    return result
+
+
+@router.get("/path", response_model=dict)
+async def find_path(
+    from_node: UUID,
+    to_node: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Find the shortest path between two nodes.
+
+    - **from_node**: Starting node ID
+    - **to_node**: Target node ID
+
+    Returns the path with all nodes and edges traversed.
+    """
+    result = await knowledge_graph_service.find_shortest_path(
+        from_node_id=from_node,
+        to_node_id=to_node,
+        db=db
+    )
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="One or both nodes not found")
+
+    return result
+
+
+@router.post("/subgraph", response_model=dict)
+async def get_subgraph(
+    request: SubgraphRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Extract a subgraph containing specific nodes.
+
+    - **node_ids**: List of node IDs to include in the subgraph
+    - **include_connections**: If true, include edges between the specified nodes (default: true)
+
+    Useful for visualizing relationships between a set of entities.
+    """
+    if not request.node_ids:
+        raise HTTPException(status_code=400, detail="At least one node_id is required")
+
+    if len(request.node_ids) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 nodes allowed")
+
+    result = await knowledge_graph_service.get_subgraph(
+        node_ids=request.node_ids,
+        db=db,
+        include_connections=request.include_connections
+    )
+
+    return result

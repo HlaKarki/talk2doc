@@ -23,6 +23,7 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "openai>=2.16.0",
     "langchain-experimental>=0.4.1",
+    "networkx>=3.6.1",
 ]
 
 [project.scripts]
