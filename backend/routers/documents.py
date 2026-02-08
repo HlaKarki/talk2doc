@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.params import Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,8 @@ class QueryRequest(BaseModel):
     """Request body for RAG query endpoints."""
     query: str
     k: int = 5  # Number of chunks to retrieve for context
+    preprocess: bool = False  # Whether to rewrite query for better retrieval
+    rerank: bool = False  # Whether to re-rank chunks using LLM scoring
 
 router = APIRouter(
     prefix="/documents",
@@ -203,7 +206,9 @@ async def query_all_documents(
     response = await rag_service.query_documents(
         query=request.query,
         db=db,
-        k=request.k
+        k=request.k,
+        preprocess=request.preprocess,
+        rerank=request.rerank
     )
 
     return {
@@ -244,7 +249,9 @@ async def query_document(
         query=request.query,
         db=db,
         document_id=document_id,
-        k=request.k
+        k=request.k,
+        preprocess=request.preprocess,
+        rerank=request.rerank
     )
 
     return {
@@ -259,3 +266,64 @@ async def query_document(
             for s in response.sources
         ]
     }
+
+
+@router.post("/query/stream")
+async def stream_query_all_documents(
+    request: QueryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream a question answer across all documents using RAG.
+
+    - **query**: Your question
+    - **k**: Number of context chunks to use (default: 5)
+
+    Returns Server-Sent Events (SSE) stream with:
+    - sources: Retrieved document chunks
+    - token: Individual response tokens
+    - [DONE]: End of stream marker
+    """
+    return StreamingResponse(
+        rag_service.stream_query_documents(
+            query=request.query,
+            db=db,
+            k=request.k,
+            preprocess=request.preprocess,
+            rerank=request.rerank
+        ),
+        media_type="text/event-stream"
+    )
+
+
+@router.post("/{document_id}/query/stream")
+async def stream_query_document(
+    document_id: UUID,
+    request: QueryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream a question answer about a specific document using RAG.
+
+    - **document_id**: UUID of the document to query
+    - **query**: Your question
+    - **k**: Number of context chunks to use (default: 5)
+
+    Returns Server-Sent Events (SSE) stream.
+    """
+    # Verify document exists
+    document = await document_service.get_document_by_id(document_id, db)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return StreamingResponse(
+        rag_service.stream_query_documents(
+            query=request.query,
+            db=db,
+            document_id=document_id,
+            k=request.k,
+            preprocess=request.preprocess,
+            rerank=request.rerank
+        ),
+        media_type="text/event-stream"
+    )
