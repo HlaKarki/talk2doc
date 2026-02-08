@@ -22,6 +22,7 @@ dependencies = [
     "pymupdf>=1.26.7",
     "uvicorn[standard]>=0.40.0",
     "openai>=2.16.0",
+    "langchain-experimental>=0.4.1",
 ]
 
 [project.scripts]
