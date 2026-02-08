@@ -5,6 +5,7 @@ from sqlalchemy import select
 from database.models import Document
 from typing import List, Optional
 from uuid import UUID
+from services import embedding_service
 
 async def extract_pdf_text(file_content: bytes) -> str:
     """Extract text from PDF file"""
@@ -22,17 +23,18 @@ async def extract_pdf_text(file_content: bytes) -> str:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to extract text from PDF text: {str(e)}")
 
+
 async def upload_document(
         file: UploadFile,
         db: AsyncSession,
 ) -> Document:
     """Upload and process a document"""
 
-    if not file.filename.lower().endswith((".pdf")):
+    if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File extension not supported")
 
     contents = await file.read()
-    max_size = 50 * 1024 * 1024 # 50 MB
+    max_size = 50 * 1024 * 1024  # 50 MB
     if len(contents) > max_size:
         raise HTTPException(status_code=413, detail="File too large. Maximum size is 50MB")
 
@@ -46,12 +48,11 @@ async def upload_document(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to process PDF: {str(e)}")
 
-
     # Create document record
     document = Document(
         filename=file.filename,
         file_type="application/pdf",
-        status="pending",
+        status="processing",
         doc_metadata={
             "text_length": len(extracted_text),
             "original_size_bytes": len(contents),
@@ -62,6 +63,24 @@ async def upload_document(
     await db.commit()
     await db.refresh(document)
 
+    # Process text (chunk + embed)
+    try:
+        num_chunks = await embedding_service.process_document_text(
+            document.id,
+            extracted_text,
+            db=db
+        )
+        document.status = "processed"
+        document.doc_metadata["num_chunks"] = num_chunks
+        await db.commit()
+        await db.refresh(document)
+
+    except Exception as e:
+        document.status = "failed"
+        document.doc_metadata["error"] = str(e)
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
+
     return document
 
 
@@ -70,6 +89,7 @@ async def get_document(db: AsyncSession) -> List[Document]:
     result = await db.execute(select(Document))
     return result.scalars().all()
 
+
 async def get_document_by_id(document_id: UUID, db: AsyncSession) -> Optional[Document]:
     """Get document by id"""
     result = await db.execute(
@@ -77,6 +97,7 @@ async def get_document_by_id(document_id: UUID, db: AsyncSession) -> Optional[Do
     )
 
     return result.scalars().one_or_none()
+
 
 async def delete_document(document_id: UUID, db: AsyncSession) -> bool:
     """Delete document by id"""

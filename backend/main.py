@@ -1,11 +1,47 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Talk2Doc API")
+from routers import documents
+from database.database import init_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown."""
+    # Startup: Initialize database
+    await init_db()
+    print("✅ Database initialized")
+
+    yield
+
+    # Shutdown: cleanup if needed
+    print("👋 Shutting down...")
+
+
+app = FastAPI(
+    title="Talk2Doc API",
+    description="Document processing and Q&A API",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Assign routers
+app.include_router(documents.router)
 
 
 @app.get("/")
 async def root():
-    return {"message": "Hello, World!"}
+    return {"message": "Talk2Doc API is running"}
 
 
 @app.get("/health")
