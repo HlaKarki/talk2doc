@@ -33,10 +33,7 @@ async def generate_embeddings(texts: List[str]) -> List[List[float]]:
     :param texts: List of text strings to embed
     :return: List of embeddings
     """
-    embeddings_model = OpenAIEmbeddings(
-        model=config.embedding_model,
-        openai_api_key=config.openai_api_key,
-    )
+    embeddings_model = OpenAIEmbeddings(model=config.embedding_mode)
     embeddings = await embeddings_model.aembed_documents(texts)
     return embeddings
 
