@@ -1,9 +1,7 @@
 """Data service for managing dataset uploads and operations."""
-import os
+import io
 import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import List, Optional, Dict, Any, BinaryIO
+from typing import List, Optional, Dict, Any
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,19 +9,25 @@ from sqlalchemy import select, delete
 from fastapi import UploadFile
 
 from database.models import Dataset, AnalysisResult
-from core.config import config
+from services.storage import get_storage_service
 
-
-# Directory for storing uploaded datasets
-DATASETS_DIR = Path("uploads/datasets")
-DATASETS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Supported file types
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 
+# Content types for R2
+CONTENT_TYPES = {
+    ".csv": "text/csv",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+}
+
 
 class DataService:
     """Service for managing dataset uploads and operations."""
+
+    def __init__(self):
+        self.storage = get_storage_service()
 
     async def upload_dataset(
         self,
@@ -39,26 +43,27 @@ class DataService:
         """
         # Validate file extension
         filename = file.filename or "unnamed"
-        ext = Path(filename).suffix.lower()
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        ext = f".{ext}"
 
         if ext not in SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported file type: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
-        # Generate unique filename and save
-        file_id = str(uuid.uuid4())
-        safe_filename = f"{file_id}{ext}"
-        file_path = DATASETS_DIR / safe_filename
-
-        # Save file to disk
+        # Read file content
         content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
-
         file_size = len(content)
+
+        # Generate R2 key and upload
+        r2_key = self.storage.generate_key("datasets", filename)
+        await self.storage.upload(
+            data=content,
+            key=r2_key,
+            content_type=CONTENT_TYPES.get(ext)
+        )
 
         # Parse file to extract metadata
         try:
-            df = self._read_file(file_path, ext)
+            df = self._read_from_bytes(content, ext)
             row_count = len(df)
             column_count = len(df.columns)
             schema = self._extract_schema(df)
@@ -71,10 +76,10 @@ class DataService:
             status = "error"
             error_message = str(e)
 
-        # Create database record
+        # Create database record (file_path stores R2 key)
         dataset = Dataset(
             filename=filename,
-            file_path=str(file_path),
+            file_path=r2_key,
             file_type=ext.lstrip("."),
             file_size=file_size,
             row_count=row_count,
@@ -89,12 +94,13 @@ class DataService:
 
         return dataset
 
-    def _read_file(self, file_path: Path, ext: str) -> pd.DataFrame:
-        """Read file into pandas DataFrame."""
+    def _read_from_bytes(self, content: bytes, ext: str) -> pd.DataFrame:
+        """Read file content into pandas DataFrame."""
+        buffer = io.BytesIO(content)
         if ext == ".csv":
-            return pd.read_csv(file_path)
+            return pd.read_csv(buffer)
         elif ext in (".xlsx", ".xls"):
-            return pd.read_excel(file_path)
+            return pd.read_excel(buffer)
         else:
             raise ValueError(f"Unsupported extension: {ext}")
 
@@ -159,17 +165,16 @@ class DataService:
         dataset_id: uuid.UUID,
         db: AsyncSession
     ) -> bool:
-        """Delete a dataset and its file."""
+        """Delete a dataset and its file from R2."""
         dataset = await self.get_dataset_by_id(dataset_id, db)
         if not dataset:
             return False
 
-        # Delete file from disk
+        # Delete file from R2
         try:
-            if os.path.exists(dataset.file_path):
-                os.remove(dataset.file_path)
+            await self.storage.delete(dataset.file_path)
         except Exception as e:
-            print(f"Warning: Could not delete file {dataset.file_path}: {e}")
+            print(f"Warning: Could not delete R2 object {dataset.file_path}: {e}")
 
         # Delete from database
         await db.execute(
@@ -183,13 +188,15 @@ class DataService:
         dataset_id: uuid.UUID,
         db: AsyncSession
     ) -> Optional[pd.DataFrame]:
-        """Load dataset as pandas DataFrame."""
+        """Load dataset as pandas DataFrame from R2."""
         dataset = await self.get_dataset_by_id(dataset_id, db)
         if not dataset:
             return None
 
+        # Download from R2
+        content = await self.storage.download(dataset.file_path)
         ext = f".{dataset.file_type}"
-        return self._read_file(Path(dataset.file_path), ext)
+        return self._read_from_bytes(content, ext)
 
     async def preview_dataset(
         self,

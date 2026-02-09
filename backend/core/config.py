@@ -13,6 +13,17 @@ class Config(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
+    # Cloudflare R2 Storage
+    r2_account_id: str
+    r2_access_key_id: str
+    r2_secret_access_key: str
+    r2_bucket_name: str = "talk2doc"
+
+    @property
+    def r2_endpoint_url(self) -> str:
+        """Get R2 S3-compatible endpoint URL."""
+        return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
