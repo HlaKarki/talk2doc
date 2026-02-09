@@ -143,3 +143,54 @@ class ConversationSummary(Base):
     def __repr__(self):
         return f"<ConversationSummary id={self.id} conversation_id={self.conversation_id}>"
 
+
+class LongTermMemory(Base):
+    """
+    Long-term memory for persistent facts and user preferences.
+
+    Memory types:
+    - preference: User preferences (e.g., "preferred_language": "Python")
+    - fact: Learned facts about the user (e.g., "occupation": "software engineer")
+    - insight: Insights derived from conversations
+    """
+    __tablename__ = "long_term_memories"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+    memory_type = Column(String(50), nullable=False)  # "preference", "fact", "insight"
+    key = Column(String(255), nullable=False)  # e.g., "user_name", "preferred_language"
+    value = Column(Text, nullable=False)  # The actual memory content
+    confidence = Column(Float, default=1.0)  # How confident we are in this memory
+    source = Column(String(100), nullable=True)  # Where this memory came from
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_accessed = Column(DateTime, default=datetime.utcnow, nullable=False)
+    access_count = Column(Integer, default=0)  # How often this memory is accessed
+
+    def __repr__(self):
+        return f"<LongTermMemory id={self.id} type={self.memory_type} key={self.key}>"
+
+
+class SemanticMemory(Base):
+    """
+    Semantic memory for storing past interactions with embeddings.
+    Enables similarity search to find relevant past conversations.
+    """
+    __tablename__ = "semantic_memories"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+    query = Column(Text, nullable=False)  # The original user query
+    response = Column(Text, nullable=False)  # The assistant's response
+    query_embedding = Column(Vector(config.embedding_dimensions))  # Embedding for similarity search
+    context_summary = Column(Text, nullable=True)  # Summary of the interaction context
+    intent = Column(String(100), nullable=True)  # Classified intent
+    agent_used = Column(String(100), nullable=True)  # Which agent handled this
+    relevance_score = Column(Float, default=1.0)  # How relevant/important this memory is
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_accessed = Column(DateTime, default=datetime.utcnow, nullable=False)
+    access_count = Column(Integer, default=0)
+
+    def __repr__(self):
+        return f"<SemanticMemory id={self.id} query={self.query[:50]}...>"
+
