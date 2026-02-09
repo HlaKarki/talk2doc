@@ -128,6 +128,7 @@ async def general_node(state: AgentState, db: AsyncSession) -> AgentState:
     from core.config import config
 
     query = state["query"]
+    conversation_history = state.get("conversation_history", "")
 
     llm = ChatOpenAI(
         model="gpt-4o-mini",
@@ -135,8 +136,8 @@ async def general_node(state: AgentState, db: AsyncSession) -> AgentState:
         api_key=config.openai_api_key
     )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a helpful assistant for a document Q&A system called Talk2Doc.
+    # Build system prompt with conversation history
+    system_prompt = """You are a helpful assistant for a document Q&A system called Talk2Doc.
 
 You can help users:
 - Ask questions about uploaded documents
@@ -144,7 +145,18 @@ You can help users:
 - Analyze data (coming soon)
 
 Be friendly and helpful. If the user seems to want document-related help,
-guide them on how to upload documents or ask questions."""),
+guide them on how to upload documents or ask questions."""
+
+    if conversation_history:
+        system_prompt += f"""
+
+Previous conversation context:
+{conversation_history}
+
+Use this context to provide relevant and consistent responses."""
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
         ("user", "{query}")
     ])
 

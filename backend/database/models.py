@@ -88,3 +88,58 @@ class KnowledgeGraphEdge(Base):
     def __repr__(self):
         return f"<KGEdge id={self.id} {self.source_node_id} --[{self.relationship_type}]--> {self.target_node_id}>"
 
+
+# ============================================================================
+# Memory System Models
+# ============================================================================
+
+class Conversation(Base):
+    """Conversation model for tracking chat sessions."""
+    __tablename__ = "conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String(255), nullable=True)  # Auto-generated or user-set title
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    conv_metadata = Column(JSON, default=dict)
+
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
+
+    def __repr__(self):
+        return f"<Conversation id={self.id} title={self.title}>"
+
+
+class Message(Base):
+    """Message model for storing conversation messages."""
+    __tablename__ = "messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(50), nullable=False)  # "user", "assistant", "system"
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    msg_metadata = Column(JSON, default=dict)  # Store sources, agent used, etc.
+
+    conversation = relationship("Conversation", back_populates="messages")
+
+    def __repr__(self):
+        return f"<Message id={self.id} role={self.role} conversation_id={self.conversation_id}>"
+
+
+class ConversationSummary(Base):
+    """Summarized context for long conversations to maintain within token limits."""
+    __tablename__ = "conversation_summaries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, unique=True)
+    summary = Column(Text, nullable=False)  # Condensed summary of older messages
+    messages_summarized = Column(Integer, default=0)  # Number of messages included in summary
+    last_message_id = Column(UUID(as_uuid=True), nullable=True)  # Last message included in summary
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    conversation = relationship("Conversation")
+
+    def __repr__(self):
+        return f"<ConversationSummary id={self.id} conversation_id={self.conversation_id}>"
+

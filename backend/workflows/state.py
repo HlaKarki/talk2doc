@@ -1,5 +1,5 @@
 """State definitions for the agent workflow."""
-from typing import TypedDict, Optional, List, Any
+from typing import TypedDict, Optional, List, Any, Dict
 from enum import Enum
 
 
@@ -19,7 +19,7 @@ class AgentState(TypedDict, total=False):
     allowing agents to share information and build on each other's work.
     """
     # Input
-    query: str                          # The user's original query
+    query: str                          # The user's original queryx
     conversation_id: Optional[str]      # For conversation tracking
 
     # Router output
@@ -36,6 +36,10 @@ class AgentState(TypedDict, total=False):
     # Context
     context: Optional[dict]             # Additional context (e.g., from memory)
     document_id: Optional[str]          # Specific document to query
+
+    # Memory context
+    memory_context: Optional[Dict[str, Any]]  # Context from memory layers
+    conversation_history: Optional[str]        # Formatted conversation history
 
     # Metadata
     error: Optional[str]                # Error message if something failed

@@ -57,6 +57,7 @@ async def chat(
             "confidence": result.confidence,
             "entities": result.entities,
             "sources": result.sources,
+            "conversation_id": result.conversation_id,
             "metadata": result.metadata
         }
 

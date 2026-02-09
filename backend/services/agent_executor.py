@@ -1,11 +1,13 @@
 """Agent executor service for running the LangGraph workflow."""
 from typing import Optional, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from workflows.agent_workflow import create_workflow
 from workflows.state import AgentState
+from services.memory.memory_manager import get_memory_manager
 
 
 @dataclass
@@ -18,6 +20,7 @@ class ExecutionResult:
     confidence: float
     entities: list
     metadata: Dict[str, Any]
+    conversation_id: Optional[str] = None
 
 
 # Create the compiled workflow (singleton)
@@ -51,18 +54,40 @@ async def execute_workflow(
     :return: ExecutionResult with the response and metadata
     """
     workflow = get_workflow()
+    memory_manager = get_memory_manager()
 
-    # Build initial state
+    # Parse conversation_id if provided
+    conv_uuid = UUID(conversation_id) if conversation_id else None
+
+    # Start or get conversation
+    conv_uuid = await memory_manager.start_conversation(
+        db=db,
+        conversation_id=conv_uuid
+    )
+
+    # Get memory context
+    memory_context = await memory_manager.get_context_for_query(
+        query=query,
+        db=db,
+        conversation_id=conv_uuid
+    )
+
+    # Get formatted conversation history for prompt
+    conversation_history = await memory_manager.format_for_prompt(
+        db=db,
+        conversation_id=conv_uuid,
+        query=query
+    )
+
+    # Build initial state with memory
     initial_state: AgentState = {
         "query": query,
         "document_id": document_id,
-        "conversation_id": conversation_id,
+        "conversation_id": str(conv_uuid),
         "context": context or {},
+        "memory_context": memory_context.to_dict(),
+        "conversation_history": conversation_history,
     }
-
-    # Create a wrapper that passes db to each node
-    # LangGraph nodes need to be sync or use invoke pattern
-    # We'll run the workflow step by step
 
     # For now, use a simpler approach: run nodes directly
     from workflows.agent_workflow import (
@@ -85,18 +110,34 @@ async def execute_workflow(
     else:
         state = await general_node(state, db)
 
+    # Save interaction to memory
+    response_text = state.get("response", "")
+    await memory_manager.update_memory(
+        db=db,
+        conversation_id=conv_uuid,
+        query=query,
+        response=response_text,
+        metadata={
+            "intent": state.get("intent"),
+            "agent_used": state.get("agent_used"),
+            "sources": state.get("sources", []),
+        }
+    )
+
     # Build result
     return ExecutionResult(
-        response=state.get("response", ""),
+        response=response_text,
         intent=state.get("intent", "unknown"),
         agent_used=state.get("agent_used", "unknown"),
         sources=state.get("sources", []),
         confidence=state.get("confidence", 0.0),
         entities=state.get("entities", []),
+        conversation_id=str(conv_uuid),
         metadata={
             "routing_reasoning": state.get("routing_reasoning"),
-            "conversation_id": conversation_id,
+            "conversation_id": str(conv_uuid),
             "document_id": document_id,
+            "has_history": memory_context.has_history,
         }
     )
 
@@ -120,10 +161,39 @@ async def execute_workflow_stream(
         data_analysis_node, general_node, route_by_intent
     )
 
+    memory_manager = get_memory_manager()
+
+    # Parse conversation_id if provided
+    conv_uuid = UUID(conversation_id) if conversation_id else None
+
+    # Start or get conversation
+    conv_uuid = await memory_manager.start_conversation(
+        db=db,
+        conversation_id=conv_uuid
+    )
+
+    yield {"type": "memory", "status": "loading context...", "conversation_id": str(conv_uuid)}
+
+    # Get memory context
+    memory_context = await memory_manager.get_context_for_query(
+        query=query,
+        db=db,
+        conversation_id=conv_uuid
+    )
+
+    # Get formatted conversation history
+    conversation_history = await memory_manager.format_for_prompt(
+        db=db,
+        conversation_id=conv_uuid,
+        query=query
+    )
+
     initial_state: AgentState = {
         "query": query,
         "document_id": document_id,
-        "conversation_id": conversation_id,
+        "conversation_id": str(conv_uuid),
+        "memory_context": memory_context.to_dict(),
+        "conversation_history": conversation_history,
     }
 
     # Step 1: Router
@@ -153,10 +223,25 @@ async def execute_workflow_stream(
     else:
         state = await general_node(state, db)
 
+    # Save interaction to memory
+    response_text = state.get("response", "")
+    await memory_manager.update_memory(
+        db=db,
+        conversation_id=conv_uuid,
+        query=query,
+        response=response_text,
+        metadata={
+            "intent": state.get("intent"),
+            "agent_used": state.get("agent_used"),
+            "sources": state.get("sources", []),
+        }
+    )
+
     # Final response
     yield {
         "type": "response",
-        "content": state.get("response", ""),
+        "content": response_text,
         "sources": state.get("sources", []),
-        "agent_used": state.get("agent_used")
+        "agent_used": state.get("agent_used"),
+        "conversation_id": str(conv_uuid)
     }
