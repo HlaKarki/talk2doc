@@ -345,16 +345,16 @@ async def search_entities(
         params["entity_type"] = entity_type
 
     result = await db.execute(text(sql), params)
-    rows = result.fetchall()
+    rows = result.mappings().fetchall()
 
     return [
         {
-            "id": str(row.id),
-            "name": row.entity_name,
-            "type": row.entity_type,
-            "properties": row.properties,
-            "document_id": str(row.source_document_id),
-            "score": 1 - row.distance  # Convert distance to similarity
+            "id": str(row["id"]),
+            "name": row["entity_name"],
+            "type": row["entity_type"],
+            "properties": row["properties"],
+            "document_id": str(row["source_document_id"]),
+            "score": 1 - row["distance"]  # Convert distance to similarity
         }
         for row in rows
     ]
