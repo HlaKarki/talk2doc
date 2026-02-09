@@ -92,7 +92,7 @@ async def execute_workflow(
     # For now, use a simpler approach: run nodes directly
     from workflows.agent_workflow import (
         router_node, document_node, knowledge_graph_node,
-        data_analysis_node, general_node, route_by_intent
+        data_analysis_node, general_node, synthesizer_node, route_by_intent
     )
 
     # Step 1: Router
@@ -109,6 +109,9 @@ async def execute_workflow(
         state = await data_analysis_node(state, db)
     else:
         state = await general_node(state, db)
+
+    # Step 3: Synthesize the response
+    state = await synthesizer_node(state, db)
 
     # Save interaction to memory
     response_text = state.get("response", "")
@@ -158,7 +161,7 @@ async def execute_workflow_stream(
     """
     from workflows.agent_workflow import (
         router_node, document_node, knowledge_graph_node,
-        data_analysis_node, general_node, route_by_intent
+        data_analysis_node, general_node, synthesizer_node, route_by_intent
     )
 
     memory_manager = get_memory_manager()
@@ -222,6 +225,10 @@ async def execute_workflow_stream(
         state = await data_analysis_node(state, db)
     else:
         state = await general_node(state, db)
+
+    # Step 3: Synthesize
+    yield {"type": "synthesizing", "status": "enhancing response..."}
+    state = await synthesizer_node(state, db)
 
     # Save interaction to memory
     response_text = state.get("response", "")

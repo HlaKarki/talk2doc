@@ -41,6 +41,10 @@ class AgentState(TypedDict, total=False):
     memory_context: Optional[Dict[str, Any]]  # Context from memory layers
     conversation_history: Optional[str]        # Formatted conversation history
 
+    # Synthesizer output
+    synthesized: Optional[bool]                  # Whether response was synthesized
+    synthesis_metadata: Optional[Dict[str, Any]] # Synthesis details
+
     # Metadata
     error: Optional[str]                # Error message if something failed
     metadata: Optional[dict]            # Additional metadata
