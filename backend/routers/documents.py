@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.database import get_db
+from database.session import get_db
 from services import document_service
 from services import vector_store
 from services import rag_service

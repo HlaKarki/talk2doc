@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
 
-from database.database import get_db
+from database.session import get_db
 from services import agent_executor
 
 

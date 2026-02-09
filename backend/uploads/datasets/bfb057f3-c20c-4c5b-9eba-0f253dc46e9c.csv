@@ -1,0 +1,11 @@
+id,name,age,salary,department,score,active
+1,Alice,25,50000,Engineering,85.5,True
+2,Bob,30,60000,Sales,92.0,True
+3,Charlie,35,75000,Engineering,78.3,False
+4,Diana,28,55000,Marketing,88.7,True
+5,Eve,42,90000,Engineering,95.2,True
+6,Frank,31,65000,Sales,82.1,False
+7,Grace,27,52000,Marketing,79.8,True
+8,Henry,45,95000,Engineering,91.5,True
+9,Ivy,33,70000,Sales,86.4,True
+10,Jack,29,58000,Marketing,84.0,False

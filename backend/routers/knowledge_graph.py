@@ -7,7 +7,7 @@ from fastapi.params import Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.database import get_db
+from database.session import get_db
 from services import knowledge_graph_service
 
 

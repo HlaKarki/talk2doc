@@ -25,6 +25,9 @@ dependencies = [
     "langchain-experimental>=0.4.1",
     "networkx>=3.6.1",
     "langgraph>=1.0.7",
+    "pandas>=3.0.0",
+    "openpyxl>=3.1.5",
+    "xlrd>=2.0.2",
 ]
 
 [project.scripts]

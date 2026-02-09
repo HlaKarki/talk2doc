@@ -259,3 +259,78 @@ class MemoryGraphEdge(Base):
     def __repr__(self):
         return f"<MemoryGraphEdge {self.source_node_id} --[{self.relationship_type}]--> {self.target_node_id}>"
 
+
+# ============================================================================
+# Dataset Models (for Data Analysis)
+# ============================================================================
+
+class Dataset(Base):
+    """
+    Dataset model for storing uploaded CSV/Excel files.
+
+    Unlike Documents (unstructured text for RAG), Datasets are structured
+    tabular data for statistical analysis and machine learning.
+    """
+    __tablename__ = "datasets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)  # Path to stored file
+    file_type = Column(String(50), nullable=False)  # "csv", "xlsx", "xls"
+    file_size = Column(Integer, nullable=True)  # Size in bytes
+
+    # Dataset metadata
+    row_count = Column(Integer, nullable=True)
+    column_count = Column(Integer, nullable=True)
+    schema = Column(JSON, default=dict)  # Column names, types, etc.
+
+    # Status
+    status = Column(String(50), default="pending", nullable=False)  # pending, profiled, error
+    error_message = Column(Text, nullable=True)
+
+    # Timestamps
+    upload_date = Column(DateTime, default=datetime.utcnow, nullable=False)
+    profiled_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    analysis_results = relationship("AnalysisResult", back_populates="dataset", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Dataset id={self.id} filename={self.filename} rows={self.row_count}>"
+
+
+class AnalysisResult(Base):
+    """
+    Stores results from data analysis operations.
+
+    Analysis types include:
+    - profile: Data profiling (statistics, distributions, missing values)
+    - nlp: NLP analysis (sentiment, entities, topics)
+    - classification: ML classification results
+    - clustering: Clustering results
+    - visualization: Generated chart data
+    """
+    __tablename__ = "analysis_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id = Column(UUID(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
+
+    analysis_type = Column(String(50), nullable=False)  # profile, nlp, classification, clustering, visualization
+    parameters = Column(JSON, default=dict)  # Parameters used for the analysis
+    results = Column(JSON, default=dict)  # Analysis results
+    visualizations = Column(JSON, default=dict)  # Plotly chart data, if any
+
+    # Status
+    status = Column(String(50), default="completed", nullable=False)  # running, completed, error
+    error_message = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    dataset = relationship("Dataset", back_populates="analysis_results")
+
+    def __repr__(self):
+        return f"<AnalysisResult id={self.id} type={self.analysis_type} dataset={self.dataset_id}>"
+

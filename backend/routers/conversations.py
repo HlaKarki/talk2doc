@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
-from database.database import get_db
+from database.session import get_db
 from database.models import Conversation, Message
 from services.memory.memory_manager import get_memory_manager
 

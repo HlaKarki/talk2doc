@@ -7,7 +7,7 @@ from fastapi.params import Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.database import get_db
+from database.session import get_db
 from services.memory.memory_manager import get_memory_manager
 
 
