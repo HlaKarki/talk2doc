@@ -194,3 +194,68 @@ class SemanticMemory(Base):
     def __repr__(self):
         return f"<SemanticMemory id={self.id} query={self.query[:50]}...>"
 
+
+class MemoryGraphNode(Base):
+    """
+    Node in the memory graph representing a concept from conversations.
+
+    Unlike KnowledgeGraphNode (document-sourced), these nodes represent
+    concepts mentioned or discussed in conversations with the user.
+    """
+    __tablename__ = "memory_graph_nodes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    concept = Column(String(255), nullable=False)  # The concept name (e.g., "Python", "machine learning")
+    concept_type = Column(String(100), nullable=False)  # "topic", "skill", "tool", "person", "project", etc.
+    properties = Column(JSON, default=dict)  # Additional metadata
+    embedding = Column(Vector(config.embedding_dimensions))  # For semantic search
+    mention_count = Column(Integer, default=1)  # How often this concept is mentioned
+    first_mentioned = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_mentioned = Column(DateTime, default=datetime.utcnow, nullable=False)
+    source_conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+
+    # Edges where this node is the source
+    outgoing_edges = relationship(
+        "MemoryGraphEdge",
+        foreign_keys="MemoryGraphEdge.source_node_id",
+        back_populates="source_node",
+        cascade="all, delete-orphan"
+    )
+    # Edges where this node is the target
+    incoming_edges = relationship(
+        "MemoryGraphEdge",
+        foreign_keys="MemoryGraphEdge.target_node_id",
+        back_populates="target_node",
+        cascade="all, delete-orphan"
+    )
+
+    def __repr__(self):
+        return f"<MemoryGraphNode id={self.id} concept={self.concept} type={self.concept_type}>"
+
+
+class MemoryGraphEdge(Base):
+    """
+    Edge in the memory graph representing a relationship between concepts.
+
+    Relationships are learned from conversation context, e.g.:
+    - "Python" --[used_for]--> "machine learning"
+    - "user" --[interested_in]--> "data science"
+    """
+    __tablename__ = "memory_graph_edges"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_node_id = Column(UUID(as_uuid=True), ForeignKey("memory_graph_nodes.id", ondelete="CASCADE"), nullable=False)
+    target_node_id = Column(UUID(as_uuid=True), ForeignKey("memory_graph_nodes.id", ondelete="CASCADE"), nullable=False)
+    relationship_type = Column(String(100), nullable=False)  # "related_to", "used_for", "part_of", "interested_in"
+    properties = Column(JSON, default=dict)
+    weight = Column(Float, default=1.0)  # Strength of the relationship
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    source_conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+
+    source_node = relationship("MemoryGraphNode", foreign_keys=[source_node_id], back_populates="outgoing_edges")
+    target_node = relationship("MemoryGraphNode", foreign_keys=[target_node_id], back_populates="incoming_edges")
+
+    def __repr__(self):
+        return f"<MemoryGraphEdge {self.source_node_id} --[{self.relationship_type}]--> {self.target_node_id}>"
+

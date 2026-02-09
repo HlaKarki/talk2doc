@@ -135,3 +135,136 @@ async def delete_long_term_memory(
         raise HTTPException(status_code=404, detail="Memory not found")
 
     return {"message": "Memory deleted", "id": str(memory_id)}
+
+
+# ============================================================================
+# Graph Memory Endpoints
+# ============================================================================
+
+@router.get("/graph")
+async def get_memory_graph(
+    limit: int = Query(default=50, le=200, description="Maximum nodes to return"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get the full memory graph (nodes and edges).
+
+    Useful for visualization.
+    """
+    memory_manager = get_memory_manager()
+    nodes = await memory_manager.graph.get_all_nodes(db, limit=limit)
+    edges = await memory_manager.graph.get_all_edges(db, limit=limit * 4)
+
+    return {
+        "nodes": [n.to_dict() for n in nodes],
+        "edges": [e.to_dict() for e in edges]
+    }
+
+
+@router.get("/graph/concept/{concept}")
+async def get_concept_graph(
+    concept: str,
+    depth: int = Query(default=2, ge=1, le=4, description="Traversal depth"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get a concept and its related concepts via graph traversal.
+    """
+    memory_manager = get_memory_manager()
+    result = await memory_manager.graph.traverse_memory_graph(
+        db=db,
+        start_concept=concept,
+        depth=depth
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Concept '{concept}' not found")
+
+    return result.to_dict()
+
+
+@router.get("/graph/search")
+async def search_graph_concepts(
+    query: str = Query(..., min_length=1),
+    k: int = Query(default=10, le=50),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Search for concepts in the memory graph using semantic similarity.
+    """
+    memory_manager = get_memory_manager()
+    concepts = await memory_manager.graph.search_concepts(
+        db=db,
+        query=query,
+        k=k,
+        threshold=0.4
+    )
+
+    return {
+        "query": query,
+        "concepts": [c.to_dict() for c in concepts]
+    }
+
+
+class LearnConceptRequest(BaseModel):
+    """Request body for learning a concept."""
+    concept: str
+    concept_type: str = "topic"
+    related_to: Optional[List[str]] = None
+
+
+@router.post("/learn")
+async def learn_concept(
+    request: LearnConceptRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Explicitly teach the system a concept and its relationships.
+    """
+    memory_manager = get_memory_manager()
+
+    # Add the main concept
+    node = await memory_manager.graph.add_memory_node(
+        db=db,
+        concept=request.concept,
+        concept_type=request.concept_type
+    )
+
+    # Add relationships if provided
+    edges_created = 0
+    if request.related_to:
+        for related_concept in request.related_to:
+            edge = await memory_manager.graph.add_memory_edge(
+                db=db,
+                source_concept=request.concept,
+                target_concept=related_concept,
+                relationship_type="related_to"
+            )
+            if edge:
+                edges_created += 1
+
+    return {
+        "message": "Concept learned",
+        "concept": request.concept,
+        "concept_type": request.concept_type,
+        "edges_created": edges_created
+    }
+
+
+@router.delete("/graph/concept/{concept}")
+async def forget_concept(
+    concept: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Delete a concept from the memory graph.
+
+    This also removes all edges connected to this concept.
+    """
+    memory_manager = get_memory_manager()
+    deleted = await memory_manager.graph.delete_node(db, concept)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Concept '{concept}' not found")
+
+    return {"message": "Concept forgotten", "concept": concept}

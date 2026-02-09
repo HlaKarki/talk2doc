@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.memory.short_term_memory import ShortTermMemoryService, MessageData
 from services.memory.long_term_memory import LongTermMemoryService
 from services.memory.semantic_memory import SemanticMemoryService
+from services.memory.graph_memory import GraphMemoryService
 
 
 @dataclass
@@ -65,7 +66,7 @@ class MemoryManager:
         self.short_term = ShortTermMemoryService()
         self.long_term = LongTermMemoryService()
         self.semantic = SemanticMemoryService()
-        # Future: self.graph = GraphMemoryService()
+        self.graph = GraphMemoryService()
 
     async def get_context_for_query(
         self,
@@ -107,14 +108,36 @@ class MemoryManager:
         )
         semantic_memories = [m.to_dict() for m in semantic_entries]
 
+        # Graph memory - find related concepts (with error handling)
+        graph_memories = []
+        try:
+            graph_concepts = await self.graph.search_concepts(
+                db=db,
+                query=query,
+                k=3,
+                threshold=0.5
+            )
+            for concept in graph_concepts:
+                related = await self.graph.get_related_memories(db, concept.concept)
+                graph_memories.append({
+                    "concept": concept.to_dict(),
+                    "related": [
+                        {"concept": r[0].to_dict(), "relationship": r[1], "weight": r[2]}
+                        for r in related[:3]
+                    ]
+                })
+        except Exception as e:
+            print(f"Warning: Graph memory search failed: {e}")
+            graph_memories = []
+
         return MemoryContext(
             conversation_id=conversation_id,
             summary=summary,
             recent_messages=recent_messages,
-            has_history=has_history or bool(long_term_memories) or bool(semantic_memories),
+            has_history=has_history or bool(long_term_memories) or bool(semantic_memories) or bool(graph_memories),
             long_term_memories=long_term_memories,
             semantic_memories=semantic_memories,
-            graph_memories=[]  # Future
+            graph_memories=graph_memories
         )
 
     async def update_memory(
@@ -171,6 +194,17 @@ class MemoryManager:
             agent_used=metadata.get("agent_used")
         )
 
+        # 4. Extract concepts and store in graph memory
+        try:
+            combined_text = f"User: {query}\nAssistant: {response}"
+            await self.graph.extract_concepts_from_text(
+                db=db,
+                text=combined_text,
+                conversation_id=conversation_id
+            )
+        except Exception as e:
+            print(f"Warning: Graph concept extraction failed: {e}")
+
     async def format_for_prompt(
         self,
         db: AsyncSession,
@@ -197,6 +231,14 @@ class MemoryManager:
             semantic_formatted = await self.semantic.format_for_prompt(db, query, k=2)
             if semantic_formatted:
                 parts.append(semantic_formatted)
+
+            # Graph memories (related concepts)
+            try:
+                graph_formatted = await self.graph.format_for_prompt(db, query, k=3)
+                if graph_formatted:
+                    parts.append(graph_formatted)
+            except Exception as e:
+                print(f"Warning: Graph memory format failed: {e}")
 
         # Short-term memory (conversation history)
         if conversation_id:
@@ -311,6 +353,7 @@ class MemoryManager:
         """Get statistics about all memory layers."""
         lt_memories = await self.long_term.get_all_memories(db)
         sem_stats = await self.semantic.get_stats(db)
+        graph_stats = await self.graph.get_stats(db)
 
         return {
             "long_term": {
@@ -321,7 +364,8 @@ class MemoryManager:
                     "insight": len([m for m in lt_memories if m.memory_type == "insight"]),
                 }
             },
-            "semantic": sem_stats
+            "semantic": sem_stats,
+            "graph": graph_stats
         }
 
 
