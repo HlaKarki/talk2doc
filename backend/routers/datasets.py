@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.session import get_db
 from services.data_service import get_data_service
 from services.data_profiling_service import get_profiling_service
+from services.nlp_service import get_nlp_service
 
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -81,6 +82,38 @@ class UploadResponse(BaseModel):
     row_count: Optional[int]
     column_count: Optional[int]
     message: str
+
+
+# NLP Analysis models
+class SentimentRequest(BaseModel):
+    """Request for sentiment analysis."""
+    column: str
+
+
+class SentimentResponse(BaseModel):
+    """Response for sentiment analysis."""
+    column: str
+    total_rows: int
+    analyzed_rows: int
+    aggregate: dict
+    insights: List[str]
+    row_results: Optional[List[dict]] = None
+
+
+class KeywordsRequest(BaseModel):
+    """Request for keyword extraction."""
+    column: str
+    top_n: int = 20
+
+
+class KeywordsResponse(BaseModel):
+    """Response for keyword extraction."""
+    column: str
+    total_rows: int
+    analyzed_rows: int
+    top_keywords: List[dict]
+    insights: List[str]
+    row_keywords: Optional[List[List[dict]]] = None
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -276,3 +309,91 @@ async def delete_dataset(
     await db.commit()
 
     return {"message": "Dataset deleted successfully", "id": str(dataset_id)}
+
+
+# =============================================================================
+# NLP Analysis Endpoints
+# =============================================================================
+
+@router.post("/{dataset_id}/analyze/sentiment", response_model=SentimentResponse)
+async def analyze_sentiment(
+    dataset_id: uuid.UUID,
+    request: SentimentRequest,
+    include_rows: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Run sentiment analysis on a text column.
+
+    Uses TextBlob for lexicon-based sentiment analysis.
+    Returns polarity (-1 to 1) and subjectivity (0 to 1) scores.
+
+    Args:
+        dataset_id: The dataset UUID
+        request: Contains the column name to analyze
+        include_rows: If True, include per-row sentiment scores
+    """
+    nlp_service = get_nlp_service()
+
+    try:
+        result = await nlp_service.analyze_sentiment(dataset_id, request.column, db)
+        await db.commit()
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+
+        response_data = result.results.copy()
+        if not include_rows:
+            response_data.pop("row_results", None)
+
+        return SentimentResponse(**response_data)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Sentiment analysis failed: {str(e)}")
+
+
+@router.post("/{dataset_id}/analyze/keywords", response_model=KeywordsResponse)
+async def extract_keywords(
+    dataset_id: uuid.UUID,
+    request: KeywordsRequest,
+    include_rows: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Extract keywords from a text column using TF-IDF.
+
+    Returns top keywords with importance scores.
+
+    Args:
+        dataset_id: The dataset UUID
+        request: Contains column name and number of keywords to extract
+        include_rows: If True, include per-row top keywords
+    """
+    nlp_service = get_nlp_service()
+
+    try:
+        result = await nlp_service.extract_keywords(
+            dataset_id,
+            request.column,
+            db,
+            top_n=request.top_n
+        )
+        await db.commit()
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+
+        response_data = result.results.copy()
+        if not include_rows:
+            response_data.pop("row_keywords", None)
+
+        return KeywordsResponse(**response_data)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Keyword extraction failed: {str(e)}")
