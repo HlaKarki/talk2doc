@@ -334,3 +334,48 @@ class AnalysisResult(Base):
     def __repr__(self):
         return f"<AnalysisResult id={self.id} type={self.analysis_type} dataset={self.dataset_id}>"
 
+
+class MLModel(Base):
+    """
+    Stores trained machine learning models.
+
+    Models are serialized and stored in R2, with metadata in this table.
+    """
+    __tablename__ = "ml_models"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id = Column(UUID(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
+
+    # Model info
+    name = Column(String(255), nullable=True)
+    model_type = Column(String(50), nullable=False)  # classifier, regressor, clusterer
+    algorithm = Column(String(100), nullable=False)  # random_forest, logistic_regression, svm, etc.
+
+    # Configuration
+    target_column = Column(String(255), nullable=False)
+    feature_columns = Column(JSON, nullable=False)  # List of feature column names
+    parameters = Column(JSON, default=dict)  # Hyperparameters used
+    preprocessing = Column(JSON, default=dict)  # Preprocessing config (encoders, scalers)
+
+    # Performance metrics
+    metrics = Column(JSON, default=dict)  # accuracy, precision, recall, f1, etc.
+    feature_importance = Column(JSON, default=dict)  # Feature importance scores
+    confusion_matrix = Column(JSON, nullable=True)  # For classifiers
+
+    # Storage
+    artifact_path = Column(String(500), nullable=False)  # R2 key for the serialized model
+
+    # Status
+    status = Column(String(50), default="trained", nullable=False)  # training, trained, error
+    error_message = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    trained_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    dataset = relationship("Dataset")
+
+    def __repr__(self):
+        return f"<MLModel id={self.id} algorithm={self.algorithm} dataset={self.dataset_id}>"
+

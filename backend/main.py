@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import documents, knowledge_graph, chat, conversations, memory, datasets
+from routers import documents, knowledge_graph, chat, conversations, memory, datasets, models
 from database.session import init_db
 
 
@@ -42,6 +42,7 @@ app.include_router(chat.router)
 app.include_router(conversations.router)
 app.include_router(memory.router)
 app.include_router(datasets.router)
+app.include_router(models.router)
 
 
 @app.get("/")
