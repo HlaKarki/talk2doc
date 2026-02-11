@@ -484,9 +484,6 @@ Provide insights based on these results:""")
             )
 
         except Exception as e:
-            import traceback
-            print(f"DataScientistAgent error: {e}")
-            traceback.print_exc()
             return await self.handle_error(e)
 
 
