@@ -175,13 +175,33 @@ Use this context to provide relevant and consistent responses."""
 
 async def data_analysis_node(state: AgentState, db: AsyncSession) -> AgentState:
     """
-    Data analysis node - placeholder for future implementation.
+    Data analysis node - uses the Data Scientist Agent for data analysis.
     """
+    from agents.data_scientist_agent import get_data_scientist_agent
+
+    query = state["query"]
+    dataset_id = state.get("dataset_id")
+
+    # Build context for the agent
+    context = {}
+    if dataset_id:
+        context["dataset_id"] = dataset_id
+
+    # Get and invoke the data scientist agent
+    agent = get_data_scientist_agent()
+    response = await agent.invoke(query, db, context)
+
+    # Extract visualizations if present
+    visualizations = response.metadata.get("visualizations", [])
+
     return {
         **state,
-        "response": "Data analysis features are coming soon! For now, I can help you with document questions or exploring the knowledge graph.",
+        "response": response.content,
         "sources": [],
-        "agent_used": "data_analysis_agent"
+        "agent_used": "data_scientist_agent",
+        "analysis_results": response.metadata.get("results", {}),
+        "visualizations": visualizations,
+        "analysis_plan": response.metadata.get("plan", {})
     }
 
 

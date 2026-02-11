@@ -45,6 +45,11 @@ class AgentState(TypedDict, total=False):
     synthesized: Optional[bool]                  # Whether response was synthesized
     synthesis_metadata: Optional[Dict[str, Any]] # Synthesis details
 
+    # Data analysis output
+    analysis_results: Optional[Dict[str, Any]]   # Results from data analysis
+    visualizations: Optional[List[Dict]]         # Generated visualizations
+    analysis_plan: Optional[Dict[str, Any]]      # The analysis plan that was executed
+
     # Metadata
     error: Optional[str]                # Error message if something failed
     metadata: Optional[dict]            # Additional metadata
