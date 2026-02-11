@@ -92,6 +92,80 @@ class PredictResponse(BaseModel):
     classes: Optional[List]
 
 
+# Clustering models
+class ClusterRequest(BaseModel):
+    """Request for clustering."""
+    feature_columns: List[str]
+    algorithm: str = "kmeans"  # kmeans, dbscan, hierarchical
+    n_clusters: Optional[int] = None  # Auto-detect if None
+
+
+class ClusterProfileResponse(BaseModel):
+    """Profile for a single cluster."""
+    cluster: int
+    name: str
+    size: int
+    percentage: float
+    feature_stats: dict
+
+
+class ClusterVisualizationResponse(BaseModel):
+    """2D visualization data from PCA."""
+    x: List[float]
+    y: List[float]
+    labels: List[int]
+    explained_variance: List[float]
+
+
+class ClusterResponse(BaseModel):
+    """Response for clustering results."""
+    algorithm: str
+    n_clusters: int
+    cluster_labels: List[int]
+    metrics: dict
+    cluster_profiles: List[dict]
+    centroids: Optional[List[List[float]]]
+    visualization: dict
+    feature_columns: List[str]
+    total_samples: int
+    noise_points: int
+
+
+@router.post("/cluster/{dataset_id}", response_model=ClusterResponse)
+async def cluster_data(
+    dataset_id: uuid.UUID,
+    request: ClusterRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Perform clustering on dataset features.
+
+    Supported algorithms:
+    - kmeans: K-Means clustering (auto-detects optimal K if not specified)
+    - dbscan: Density-based clustering (handles outliers as noise)
+    - hierarchical: Agglomerative hierarchical clustering
+
+    Returns cluster labels, metrics, profiles, and 2D visualization data.
+    """
+    ml_service = get_ml_service()
+
+    try:
+        result = await ml_service.cluster_data(
+            dataset_id=dataset_id,
+            feature_columns=request.feature_columns,
+            algorithm=request.algorithm,
+            n_clusters=request.n_clusters,
+            db=db
+        )
+
+        return ClusterResponse(**result)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Clustering failed: {str(e)}")
+
+
 @router.post("/train/{dataset_id}", response_model=TrainResponse)
 async def train_classifier(
     dataset_id: uuid.UUID,

@@ -12,13 +12,18 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+from sklearn.decomposition import PCA
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
     f1_score,
     confusion_matrix,
-    classification_report
+    classification_report,
+    silhouette_score,
+    calinski_harabasz_score,
+    davies_bouldin_score
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -391,6 +396,223 @@ class MLService:
         # Delete from database
         await db.delete(ml_model)
         return True
+
+    # =========================================================================
+    # Clustering Methods
+    # =========================================================================
+
+    async def cluster_data(
+        self,
+        dataset_id: uuid.UUID,
+        feature_columns: List[str],
+        algorithm: Literal["kmeans", "dbscan", "hierarchical"] = "kmeans",
+        n_clusters: Optional[int] = None,
+        db: AsyncSession = None
+    ) -> Dict[str, Any]:
+        """
+        Perform clustering on dataset features.
+
+        :param dataset_id: Dataset UUID
+        :param feature_columns: Columns to use for clustering
+        :param algorithm: Clustering algorithm (kmeans, dbscan, hierarchical)
+        :param n_clusters: Number of clusters (auto-detected if None for kmeans)
+        :param db: Database session
+        :return: Clustering results with labels, metrics, and visualization data
+        """
+        # Load dataset
+        df = await self.data_service.get_dataframe(dataset_id, db)
+        if df is None:
+            raise ValueError("Dataset not found")
+
+        # Validate columns
+        missing_cols = set(feature_columns) - set(df.columns)
+        if missing_cols:
+            raise ValueError(f"Columns not found in dataset: {missing_cols}")
+
+        # Prepare features
+        X = df[feature_columns].copy()
+
+        # Preprocess (handle missing, scale)
+        X_processed, preprocessing_info = self._preprocess_for_clustering(X)
+
+        if len(X_processed) < 10:
+            raise ValueError("Need at least 10 samples for clustering")
+
+        # Determine optimal clusters if not specified (for kmeans)
+        if algorithm == "kmeans" and n_clusters is None:
+            n_clusters = self._find_optimal_clusters(X_processed)
+
+        # Perform clustering
+        if algorithm == "kmeans":
+            model = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            labels = model.fit_predict(X_processed)
+            centroids = model.cluster_centers_.tolist()
+        elif algorithm == "dbscan":
+            model = DBSCAN(eps=0.5, min_samples=5)
+            labels = model.fit_predict(X_processed)
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            centroids = None
+        elif algorithm == "hierarchical":
+            if n_clusters is None:
+                n_clusters = 3  # Default for hierarchical
+            model = AgglomerativeClustering(n_clusters=n_clusters)
+            labels = model.fit_predict(X_processed)
+            centroids = None
+        else:
+            raise ValueError(f"Unknown algorithm: {algorithm}")
+
+        # Calculate metrics (only if we have valid clusters)
+        unique_labels = set(labels)
+        n_valid_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+
+        metrics = {}
+        if n_valid_clusters >= 2:
+            # Filter out noise points (-1) for metrics
+            valid_mask = labels != -1
+            if valid_mask.sum() >= 2:
+                metrics["silhouette_score"] = round(
+                    silhouette_score(X_processed[valid_mask], labels[valid_mask]), 4
+                )
+                metrics["calinski_harabasz_score"] = round(
+                    calinski_harabasz_score(X_processed[valid_mask], labels[valid_mask]), 4
+                )
+                metrics["davies_bouldin_score"] = round(
+                    davies_bouldin_score(X_processed[valid_mask], labels[valid_mask]), 4
+                )
+
+        # Generate cluster profiles
+        cluster_profiles = self._generate_cluster_profiles(
+            df[feature_columns], labels, feature_columns
+        )
+
+        # PCA for visualization (reduce to 2D)
+        viz_data = self._generate_cluster_visualization(X_processed, labels)
+
+        return {
+            "algorithm": algorithm,
+            "n_clusters": int(n_valid_clusters),
+            "cluster_labels": [int(x) for x in labels],
+            "metrics": metrics,
+            "cluster_profiles": cluster_profiles,
+            "centroids": centroids,
+            "visualization": viz_data,
+            "feature_columns": feature_columns,
+            "total_samples": int(len(labels)),
+            "noise_points": int((labels == -1).sum()) if algorithm == "dbscan" else 0
+        }
+
+    def _preprocess_for_clustering(self, X: pd.DataFrame) -> tuple[np.ndarray, Dict[str, Any]]:
+        """Preprocess features for clustering (numeric only, scaled)."""
+        preprocessing_info = {"columns": list(X.columns)}
+
+        X_processed = X.copy()
+
+        # Handle each column
+        for col in X.columns:
+            if not pd.api.types.is_numeric_dtype(X[col]):
+                # Encode categorical
+                encoder = LabelEncoder()
+                X_processed[col] = X_processed[col].fillna("__MISSING__").astype(str)
+                X_processed[col] = encoder.fit_transform(X_processed[col])
+            else:
+                # Fill numeric missing with median
+                median_val = X_processed[col].median()
+                X_processed[col] = X_processed[col].fillna(median_val)
+
+        # Scale features
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_processed)
+
+        return X_scaled, preprocessing_info
+
+    def _find_optimal_clusters(self, X: np.ndarray, max_k: int = 10) -> int:
+        """Find optimal number of clusters using elbow method with silhouette."""
+        max_k = min(max_k, len(X) - 1)
+        if max_k < 2:
+            return 2
+
+        silhouette_scores = []
+        k_range = range(2, max_k + 1)
+
+        for k in k_range:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(X)
+            score = silhouette_score(X, labels)
+            silhouette_scores.append(score)
+
+        # Find k with highest silhouette score
+        best_idx = np.argmax(silhouette_scores)
+        optimal_k = k_range[best_idx]
+
+        return optimal_k
+
+    def _generate_cluster_profiles(
+        self,
+        df: pd.DataFrame,
+        labels: np.ndarray,
+        feature_columns: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Generate statistical profiles for each cluster."""
+        profiles = []
+        unique_labels = sorted(set(labels))
+
+        for label in unique_labels:
+            if label == -1:
+                # Noise points in DBSCAN
+                cluster_name = "noise"
+            else:
+                cluster_name = f"cluster_{label}"
+
+            mask = labels == label
+            cluster_data = df[mask]
+
+            profile = {
+                "cluster": int(label),
+                "name": cluster_name,
+                "size": int(mask.sum()),
+                "percentage": round(float(mask.sum()) / len(labels) * 100, 2),
+                "feature_stats": {}
+            }
+
+            # Calculate stats for each feature
+            for col in feature_columns:
+                col_data = cluster_data[col]
+                if pd.api.types.is_numeric_dtype(col_data):
+                    profile["feature_stats"][col] = {
+                        "mean": round(float(col_data.mean()), 4),
+                        "std": round(float(col_data.std()), 4),
+                        "min": round(float(col_data.min()), 4),
+                        "max": round(float(col_data.max()), 4),
+                    }
+                else:
+                    # For categorical, show mode
+                    mode_val = col_data.mode()
+                    profile["feature_stats"][col] = {
+                        "mode": str(mode_val.iloc[0]) if len(mode_val) > 0 else None,
+                        "unique_count": int(col_data.nunique())
+                    }
+
+            profiles.append(profile)
+
+        return profiles
+
+    def _generate_cluster_visualization(
+        self,
+        X: np.ndarray,
+        labels: np.ndarray
+    ) -> Dict[str, Any]:
+        """Generate 2D visualization data using PCA."""
+        # Reduce to 2D using PCA
+        n_components = min(2, X.shape[1])
+        pca = PCA(n_components=n_components)
+        coords = pca.fit_transform(X)
+
+        return {
+            "x": [float(x) for x in coords[:, 0]],
+            "y": [float(y) for y in coords[:, 1]] if n_components > 1 else [0.0] * len(coords),
+            "labels": [int(l) for l in labels],
+            "explained_variance": [float(v) for v in pca.explained_variance_ratio_]
+        }
 
 
 # Singleton instance

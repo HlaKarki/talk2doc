@@ -1422,7 +1422,7 @@ Next Up (Data Features):
 ✅ 17. Data Upload + Profiling
 ✅ 18. NLP Analysis on Text Data (sentiment + keywords only)
 ✅ 19. Supervised Learning (Classification)
-⬜ 20. Unsupervised Learning (Clustering)
+✅ 20. Unsupervised Learning (Clustering)
 ⬜ 21. Data Visualization Generation
 ⬜ 22. Data Scientist Agent - Full Implementation
 
