@@ -10,6 +10,7 @@ from database.session import get_db
 from services.data_service import get_data_service
 from services.data_profiling_service import get_profiling_service
 from services.nlp_service import get_nlp_service
+from services.visualization_service import get_visualization_service
 
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -397,3 +398,241 @@ async def extract_keywords(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Keyword extraction failed: {str(e)}")
+
+
+# =============================================================================
+# Visualization Endpoints
+# =============================================================================
+
+class DistributionRequest(BaseModel):
+    """Request for distribution plot."""
+    column: str
+    plot_type: str = "auto"  # histogram, box, violin, bar, or auto
+
+
+class ScatterRequest(BaseModel):
+    """Request for scatter plot."""
+    x_column: str
+    y_column: str
+    color_by: Optional[str] = None
+    size_by: Optional[str] = None
+
+
+class CorrelationRequest(BaseModel):
+    """Request for correlation matrix."""
+    columns: Optional[List[str]] = None
+
+
+class TimeSeriesRequest(BaseModel):
+    """Request for time series plot."""
+    date_column: str
+    value_column: str
+    group_by: Optional[str] = None
+
+
+class PairplotRequest(BaseModel):
+    """Request for pairplot."""
+    columns: Optional[List[str]] = None
+    color_by: Optional[str] = None
+    max_columns: int = 5
+
+
+class VisualizationResponse(BaseModel):
+    """Response containing a Plotly figure."""
+    type: str
+    figure: dict
+
+
+class AutoVisualizationResponse(BaseModel):
+    """Response for auto-generated visualizations."""
+    charts: List[dict]
+    total: int
+
+
+@router.post("/{dataset_id}/visualize/distribution", response_model=VisualizationResponse)
+async def visualize_distribution(
+    dataset_id: uuid.UUID,
+    request: DistributionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a distribution plot for a column.
+
+    Plot types:
+    - histogram: For continuous numeric data
+    - box: Box plot showing quartiles and outliers
+    - violin: Violin plot showing distribution shape
+    - bar: Bar chart for categorical data
+    - auto: Automatically select based on data type
+    """
+    viz_service = get_visualization_service()
+
+    try:
+        df = await viz_service._load_dataset(dataset_id, db)
+        figure = viz_service.generate_distribution_plot(
+            df, request.column, request.plot_type
+        )
+
+        return VisualizationResponse(
+            type="distribution",
+            figure=figure
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Visualization failed: {str(e)}")
+
+
+@router.post("/{dataset_id}/visualize/scatter", response_model=VisualizationResponse)
+async def visualize_scatter(
+    dataset_id: uuid.UUID,
+    request: ScatterRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a scatter plot for two columns.
+
+    Optionally color or size points by another column.
+    """
+    viz_service = get_visualization_service()
+
+    try:
+        df = await viz_service._load_dataset(dataset_id, db)
+        figure = viz_service.generate_scatter_plot(
+            df, request.x_column, request.y_column,
+            request.color_by, request.size_by
+        )
+
+        return VisualizationResponse(
+            type="scatter",
+            figure=figure
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Visualization failed: {str(e)}")
+
+
+@router.post("/{dataset_id}/visualize/correlation", response_model=VisualizationResponse)
+async def visualize_correlation(
+    dataset_id: uuid.UUID,
+    request: CorrelationRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a correlation matrix heatmap.
+
+    Shows pairwise correlation between numeric columns.
+    """
+    viz_service = get_visualization_service()
+
+    try:
+        df = await viz_service._load_dataset(dataset_id, db)
+        figure = viz_service.generate_correlation_matrix(df, request.columns)
+
+        return VisualizationResponse(
+            type="correlation",
+            figure=figure
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Visualization failed: {str(e)}")
+
+
+@router.post("/{dataset_id}/visualize/timeseries", response_model=VisualizationResponse)
+async def visualize_timeseries(
+    dataset_id: uuid.UUID,
+    request: TimeSeriesRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a time series line chart.
+
+    Requires a date/datetime column and a numeric value column.
+    Optionally group by a categorical column for multiple lines.
+    """
+    viz_service = get_visualization_service()
+
+    try:
+        df = await viz_service._load_dataset(dataset_id, db)
+        figure = viz_service.generate_time_series_plot(
+            df, request.date_column, request.value_column, request.group_by
+        )
+
+        return VisualizationResponse(
+            type="timeseries",
+            figure=figure
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Visualization failed: {str(e)}")
+
+
+@router.post("/{dataset_id}/visualize/pairplot", response_model=VisualizationResponse)
+async def visualize_pairplot(
+    dataset_id: uuid.UUID,
+    request: PairplotRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a pairwise scatter plot matrix.
+
+    Shows relationships between multiple numeric columns.
+    """
+    viz_service = get_visualization_service()
+
+    try:
+        df = await viz_service._load_dataset(dataset_id, db)
+        figure = viz_service.generate_pairplot(
+            df, request.columns, request.color_by, request.max_columns
+        )
+
+        return VisualizationResponse(
+            type="pairplot",
+            figure=figure
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Visualization failed: {str(e)}")
+
+
+@router.get("/{dataset_id}/visualize/auto", response_model=AutoVisualizationResponse)
+async def auto_visualize(
+    dataset_id: uuid.UUID,
+    max_charts: int = 6,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Automatically generate relevant visualizations based on data types.
+
+    Analyzes the dataset and creates appropriate charts:
+    - Distribution plots for numeric columns
+    - Bar charts for categorical columns
+    - Correlation matrix for numeric relationships
+    - Scatter plot for key numeric pairs
+    - Time series if datetime columns detected
+    """
+    viz_service = get_visualization_service()
+
+    try:
+        charts = await viz_service.auto_generate_visualizations(
+            dataset_id, db, max_charts
+        )
+
+        return AutoVisualizationResponse(
+            charts=charts,
+            total=len(charts)
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Auto visualization failed: {str(e)}")
