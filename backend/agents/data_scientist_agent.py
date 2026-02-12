@@ -379,7 +379,8 @@ class DataScientistAgent(BaseAgent):
                 return {
                     "type": "auto",
                     "charts_generated": len(charts),
-                    "chart_types": [c.get("type") for c in charts]
+                    "chart_types": [c.get("type") for c in charts],
+                    "charts": charts,
                 }
 
             elif viz_type == "distribution":
@@ -428,7 +429,7 @@ class DataScientistAgent(BaseAgent):
         results_summary = json.dumps(results, indent=2, default=str)
 
         insight_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a data scientist explaining analysis results to a user.
+            ("system", """You are a data analysis assistant explaining results to the user.
 
 Based on the analysis results, provide clear, actionable insights in natural language.
 
@@ -438,7 +439,8 @@ Guidelines:
 - Mention any patterns or anomalies
 - Suggest next steps if appropriate
 - Use numbers and percentages where relevant
-- Format nicely with bullet points if multiple insights"""),
+- Format nicely with bullet points if multiple insights
+- Do not assume or mention the user's profession/role unless the user explicitly told you"""),
             ("user", """Original question: {query}
 
 Analysis plan: {plan}
@@ -563,6 +565,10 @@ Provide insights based on these results:""")
                     results["analyses"]["visualization"] = viz_result
                     if "figure" in viz_result:
                         visualizations.append(viz_result)
+                    elif isinstance(viz_result.get("charts"), list):
+                        for chart in viz_result["charts"]:
+                            if isinstance(chart, dict) and "figure" in chart:
+                                visualizations.append(chart)
 
                 else:
                     results["analyses"][f"unsupported_{tool}"] = {

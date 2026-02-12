@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import List, Optional, AsyncGenerator
+from typing import List, Optional, AsyncGenerator, Any
 from uuid import UUID
 
 from langchain_openai import ChatOpenAI
@@ -56,11 +56,46 @@ SYSTEM_PROMPT = """You are a helpful AI assistant that answers questions based o
   - Cite your sources using [Source 1], [Source 2], etc. when referencing specific information
   - Do not make up information that isn't in the context"""
 
+
+def _extract_text(content: Any) -> str:
+    """Best-effort extraction of text from model content payloads."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return str(content)
+
+
+def _is_empty_answer(answer: str) -> bool:
+    """Return True if answer is effectively empty."""
+    return not (answer or "").strip()
+
 def get_llm(streaming: bool = False) -> ChatOpenAI:
     """Get a configured LLM instance."""
     return ChatOpenAI(
         model="gpt-5-mini",
         temperature=0.6,
+        max_tokens=1000,
+        api_key=config.openai_api_key,
+        streaming=streaming
+    )
+
+
+def get_fallback_llm(streaming: bool = False) -> ChatOpenAI:
+    """Fallback model when primary model returns no visible text output."""
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0.3,
         max_tokens=1000,
         api_key=config.openai_api_key,
         streaming=streaming
@@ -207,7 +242,23 @@ Answer:""")
         "question": query
     })
 
-    answer = response.content or ""
+    answer = _extract_text(response.content)
+
+    # Fallback when reasoning-only output yields empty visible content.
+    if _is_empty_answer(answer):
+        try:
+            fallback_llm = get_fallback_llm()
+            fallback_chain = prompt | fallback_llm
+            fallback_response = await fallback_chain.ainvoke({
+                "context": context,
+                "question": query
+            })
+            answer = _extract_text(fallback_response.content)
+        except Exception:
+            answer = ""
+
+    if _is_empty_answer(answer):
+        answer = "I don't have enough information in the documents to answer this question."
 
     # Step 6: Build sources list
     sources = [
@@ -282,8 +333,28 @@ Answer:""")
 
     # Step 6: Create chain and stream
     chain = prompt | llm
+    emitted_tokens = False
     async for chunk in chain.astream({"context": context, "question": query}):
         if chunk.content:
+            emitted_tokens = True
             yield f"data: {json.dumps({'type': 'token', 'content': chunk.content})}\n\n"
+
+    # Fallback when stream emits nothing (e.g., reasoning-only output).
+    if not emitted_tokens:
+        try:
+            fallback_llm = get_fallback_llm(streaming=False)
+            fallback_chain = prompt | fallback_llm
+            fallback_response = await fallback_chain.ainvoke({
+                "context": context,
+                "question": query
+            })
+            fallback_text = _extract_text(fallback_response.content)
+        except Exception:
+            fallback_text = ""
+
+        if _is_empty_answer(fallback_text):
+            fallback_text = "I don't have enough information in the documents to answer this question."
+
+        yield f"data: {json.dumps({'type': 'token', 'content': fallback_text})}\n\n"
 
     yield "data: [DONE]\n\n"

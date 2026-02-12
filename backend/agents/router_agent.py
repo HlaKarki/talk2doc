@@ -33,8 +33,8 @@ Analyze the user's query and classify it into one of these intents:
 1. **document_query**: Questions about document content, asking for information from uploaded documents.
    Examples: "What does the document say about X?", "Summarize the key points", "Find information about Y"
 
-2. **knowledge_graph**: Questions about relationships between concepts/entities.
-   Examples: "How is X related to Y?", "What concepts are connected to Z?", "Show me related topics"
+2. **knowledge_graph**: Questions about relationships between concepts/entities, or requests to extract/build a graph from documents.
+   Examples: "How is X related to Y?", "What concepts are connected to Z?", "Show me related topics", "Extract the knowledge graph for this document", "Build a graph from this PDF"
 
 3. **data_analysis**: Questions about analyzing data, statistics, datasets, ML, clustering, or classification.
    Examples: "Analyze this data", "What's the correlation?", "Train a model", "Classify this dataset", "Cluster customers"
@@ -49,6 +49,7 @@ You will also receive selected resource context (if any):
 Routing rules with selected resource context:
 - If the query is ambiguous (e.g., "summarize this", "explain it"), prefer `document_query` when a document is selected.
 - If the query asks for analysis/modeling and a dataset is selected, prefer `data_analysis`.
+- If the query asks to extract/build/create a knowledge graph and a document is selected, prefer `knowledge_graph`.
 - Do not force data/document routing for clearly general conversation.
 
 Extract any key entities (concepts, names, topics) mentioned in the query.

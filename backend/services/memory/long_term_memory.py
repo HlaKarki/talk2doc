@@ -1,5 +1,6 @@
 """Long-term memory service for persistent facts and preferences."""
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -53,6 +54,10 @@ class LongTermMemoryService:
     TYPE_PREFERENCE = "preference"
     TYPE_FACT = "fact"
     TYPE_INSIGHT = "insight"
+    _NAME_PATTERNS = [
+        re.compile(r"\bmy\s+name\s+is(?:\s+actually)?\s+([A-Za-z][A-Za-z' -]{0,49})", re.IGNORECASE),
+        re.compile(r"\bcall\s+me\s+([A-Za-z][A-Za-z' -]{0,49})", re.IGNORECASE),
+    ]
 
     def __init__(self):
         self._llm = None
@@ -309,8 +314,27 @@ class LongTermMemoryService:
         conversation_id: Optional[UUID] = None
     ) -> List[LongTermMemory]:
         """Use LLM to extract memorable facts from a conversation turn."""
+        created_memories: List[LongTermMemory] = []
+
+        # Deterministic extraction for explicit name declarations.
+        # This avoids silent failures in LLM JSON parsing and supports corrections.
+        explicit_name = self._extract_explicit_user_name(query)
+        if explicit_name:
+            created_memories.append(
+                await self.store_preference(
+                    db=db,
+                    key="user_name",
+                    value=explicit_name,
+                    conversation_id=conversation_id,
+                    confidence=1.0
+                )
+            )
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", """Analyze this conversation turn and extract any important facts or preferences about the user that should be remembered for future conversations.
+
+Only extract information explicitly stated by the user.
+Do not infer user facts/preferences from assistant text.
 
 Return a JSON array of memories to store. Each memory should have:
 - "type": "fact" (things about the user) or "preference" (user preferences) or "insight" (patterns/interests)
@@ -322,8 +346,8 @@ Only extract clear, explicit information. Don't make assumptions.
 If there's nothing memorable, return an empty array: []
 
 Examples:
-- User says "My name is Alex" -> [{"type": "fact", "key": "user_name", "value": "Alex", "confidence": 1.0}]
-- User says "I prefer Python" -> [{"type": "preference", "key": "preferred_language", "value": "Python", "confidence": 0.9}]"""),
+- User says "My name is Alex" -> [{{"type": "fact", "key": "user_name", "value": "Alex", "confidence": 1.0}}]
+- User says "I prefer Python" -> [{{"type": "preference", "key": "preferred_language", "value": "Python", "confidence": 0.9}}]"""),
             ("user", "User: {query}\n\nAssistant: {response}\n\nExtract memories (JSON array):")
         ])
 
@@ -341,9 +365,7 @@ Examples:
 
             memories_data = json.loads(content)
             if not isinstance(memories_data, list):
-                return []
-
-            created_memories = []
+                return created_memories
             for mem in memories_data:
                 mem_type = mem.get("type", "fact")
                 key = mem.get("key", "")
@@ -351,6 +373,11 @@ Examples:
                 confidence = mem.get("confidence", 0.8)
 
                 if not key or not value:
+                    continue
+
+                # user_name is handled only by deterministic parsing of user input.
+                # This prevents incorrect name memories inferred from assistant output.
+                if key == "user_name":
                     continue
 
                 if mem_type == "preference":
@@ -366,7 +393,29 @@ Examples:
 
         except (json.JSONDecodeError, Exception) as e:
             print(f"Error extracting memories: {e}")
-            return []
+            return created_memories
+
+    @classmethod
+    def _extract_explicit_user_name(cls, query: str) -> Optional[str]:
+        """Extract explicit user-provided name from message text."""
+        if not query:
+            return None
+
+        text = query.strip()
+        for pattern in cls._NAME_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+
+            name = match.group(1).strip(" \t\n\r.,!?;:\"'")
+            if not name:
+                continue
+
+            # Normalize consecutive spaces.
+            normalized = " ".join(name.split())
+            return normalized
+
+        return None
 
     async def format_for_prompt(self, db: AsyncSession, k: int = 5) -> str:
         """Format important memories as context for prompts."""

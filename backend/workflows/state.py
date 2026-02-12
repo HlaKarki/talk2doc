@@ -45,6 +45,7 @@ class AgentState(TypedDict, total=False):
     # Synthesizer output
     synthesized: Optional[bool]                  # Whether response was synthesized
     synthesis_metadata: Optional[Dict[str, Any]] # Synthesis details
+    skip_synthesis: Optional[bool]               # Skip synthesis for deterministic responses
 
     # Data analysis output
     analysis_results: Optional[Dict[str, Any]]   # Results from data analysis

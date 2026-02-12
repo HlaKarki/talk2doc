@@ -207,6 +207,8 @@ Guidelines:
 - If sources are cited, maintain proper attribution
 - Resolve any apparent conflicts between sources
 - Use markdown formatting for readability when appropriate
+- Do not assume the user's profession or role unless explicitly provided by the user
+- Mention stored user preferences/profile details only when directly relevant to the user's query
 
 DO NOT:
 - Contradict the original response without good reason

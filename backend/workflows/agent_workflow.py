@@ -1,4 +1,5 @@
 """LangGraph workflow for agent orchestration."""
+import re
 from typing import Literal
 
 from langgraph.graph import StateGraph, END, START
@@ -14,6 +15,64 @@ router_agent = RouterAgent()
 synthesizer_agent = SynthesizerAgent()
 
 
+_NAME_QUERY_PATTERNS = [
+    re.compile(r"\bwhat(?:'s| is)\s+my\s+name\b", re.IGNORECASE),
+    re.compile(r"\bwho\s+am\s+i\b", re.IGNORECASE),
+]
+_NAME_DECLARATION_PATTERNS = [
+    re.compile(r"\bmy\s+name\s+is(?:\s+actually)?\s+([A-Za-z][A-Za-z' -]{0,49})", re.IGNORECASE),
+    re.compile(r"\bcall\s+me\s+([A-Za-z][A-Za-z' -]{0,49})", re.IGNORECASE),
+]
+_KG_EXTRACTION_PATTERNS = [
+    re.compile(r"\bextract\b.*\bknowledge\s+graph\b", re.IGNORECASE),
+    re.compile(r"\bbuild\b.*\bknowledge\s+graph\b", re.IGNORECASE),
+    re.compile(r"\bcreate\b.*\bknowledge\s+graph\b", re.IGNORECASE),
+    re.compile(r"\bgenerate\b.*\bknowledge\s+graph\b", re.IGNORECASE),
+    re.compile(r"\bknowledge\s+graph\b.*\b(this|selected)\s+document\b", re.IGNORECASE),
+]
+
+
+def _is_name_query(query: str) -> bool:
+    """Detect if the user is asking for their name."""
+    return any(pattern.search(query or "") for pattern in _NAME_QUERY_PATTERNS)
+
+
+def _extract_declared_name(text: str) -> str | None:
+    """Extract explicit self-declared name from text."""
+    if not text:
+        return None
+    for pattern in _NAME_DECLARATION_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        name = match.group(1).strip(" \t\n\r.,!?;:\"'")
+        if name:
+            return " ".join(name.split())
+    return None
+
+
+def _resolve_name_from_memory(memory_context: dict) -> str | None:
+    """Resolve the most recent known user name from memory context."""
+    recent_messages = (memory_context or {}).get("recent_messages", [])
+    for msg in reversed(recent_messages):
+        if msg.get("role") != "user":
+            continue
+        explicit_name = _extract_declared_name(msg.get("content", ""))
+        if explicit_name:
+            return explicit_name
+
+    for mem in (memory_context or {}).get("long_term_memories", []):
+        if mem.get("key") == "user_name" and mem.get("value"):
+            return str(mem["value"]).strip()
+
+    return None
+
+
+def _requests_kg_extraction(query: str) -> bool:
+    """Detect if user is explicitly asking to extract/build a knowledge graph."""
+    return any(pattern.search(query or "") for pattern in _KG_EXTRACTION_PATTERNS)
+
+
 async def router_node(state: AgentState, db: AsyncSession) -> AgentState:
     """
     Router node that classifies intent and updates state.
@@ -26,6 +85,16 @@ async def router_node(state: AgentState, db: AsyncSession) -> AgentState:
         routing_context["dataset_id"] = state["dataset_id"]
 
     decision = await router_agent.classify(query, db, context=routing_context)
+
+    # Deterministic override for explicit KG extraction requests.
+    if state.get("document_id") and _requests_kg_extraction(query):
+        return {
+            **state,
+            "intent": Intent.KNOWLEDGE_GRAPH.value,
+            "confidence": max(decision.confidence, 0.95),
+            "entities": decision.entities,
+            "routing_reasoning": "Rule override: explicit knowledge graph extraction requested for selected document.",
+        }
 
     return {
         **state,
@@ -82,7 +151,52 @@ async def knowledge_graph_node(state: AgentState, db: AsyncSession) -> AgentStat
     from services import knowledge_graph_service
 
     query = state["query"]
+    document_id = state.get("document_id")
     entities = state.get("entities", [])
+
+    if _requests_kg_extraction(query):
+        if not document_id:
+            return {
+                **state,
+                "response": "To extract a knowledge graph, select a document first and then ask me to extract it.",
+                "sources": [],
+                "agent_used": "knowledge_graph_agent",
+                "skip_synthesis": True,
+            }
+
+        from uuid import UUID
+        try:
+            result = await knowledge_graph_service.build_graph_from_document(
+                document_id=UUID(document_id),
+                db=db
+            )
+            return {
+                **state,
+                "response": (
+                    "Knowledge graph extracted for the selected document. "
+                    f"Nodes created: {result.get('nodes_created', 0)}, "
+                    f"edges created: {result.get('edges_created', 0)}."
+                ),
+                "sources": [],
+                "agent_used": "knowledge_graph_agent",
+                "skip_synthesis": True,
+            }
+        except ValueError as e:
+            return {
+                **state,
+                "response": f"I couldn't extract the knowledge graph: {str(e)}",
+                "sources": [],
+                "agent_used": "knowledge_graph_agent",
+                "skip_synthesis": True,
+            }
+        except Exception as e:
+            return {
+                **state,
+                "response": f"Knowledge graph extraction failed: {str(e)}",
+                "sources": [],
+                "agent_used": "knowledge_graph_agent",
+                "skip_synthesis": True,
+            }
 
     # Search for relevant entities
     search_results = await knowledge_graph_service.search_entities(
@@ -136,6 +250,25 @@ async def general_node(state: AgentState, db: AsyncSession) -> AgentState:
 
     query = state["query"]
     conversation_history = state.get("conversation_history", "")
+    memory_context = state.get("memory_context", {}) or {}
+
+    if _is_name_query(query):
+        resolved_name = _resolve_name_from_memory(memory_context)
+        if resolved_name:
+            return {
+                **state,
+                "response": f"Your name is {resolved_name}.",
+                "sources": [],
+                "agent_used": "general_agent",
+                "skip_synthesis": True,
+            }
+        return {
+            **state,
+            "response": "I don't know your name yet. Tell me with 'my name is ...' and I'll remember it.",
+            "sources": [],
+            "agent_used": "general_agent",
+            "skip_synthesis": True,
+        }
 
     llm = ChatOpenAI(
         model="gpt-4o-mini",
@@ -152,7 +285,8 @@ You can help users:
 - Analyze uploaded datasets, including modeling tasks
 
 Be friendly and helpful. If the user seems to want document-related help,
-guide them on how to upload documents or ask questions."""
+guide them on how to upload documents or ask questions.
+Do not mention stored profile details (e.g., occupation, preferences) unless directly relevant to the user's question."""
 
     if conversation_history:
         system_prompt += f"""
@@ -225,6 +359,22 @@ async def synthesizer_node(state: AgentState, db: AsyncSession) -> AgentState:
     sources = state.get("sources", [])
     agent_used = state.get("agent_used", "unknown")
     memory_context = state.get("memory_context", {})
+
+    if state.get("skip_synthesis"):
+        return {
+            **state,
+            "synthesized": False,
+            "synthesis_metadata": {"synthesized": False, "reason": "explicit_passthrough"},
+        }
+
+    # Keep document answers grounded to retrieved content.
+    # Synthesizer can over-generalize document responses with unrelated memory context.
+    if agent_used == "document_agent":
+        return {
+            **state,
+            "synthesized": False,
+            "synthesis_metadata": {"synthesized": False, "reason": "document_passthrough"}
+        }
 
     # Skip synthesis for placeholder/error responses
     if not response or "coming soon" in response.lower():
