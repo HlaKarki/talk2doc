@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from workflows.agent_workflow import create_workflow
 from workflows.state import AgentState
 from services.memory.memory_manager import get_memory_manager
+from database.models import Conversation
 
 
 @dataclass
@@ -36,10 +38,80 @@ def get_workflow():
     return _workflow
 
 
+def _selection_type(document_id: Optional[str], dataset_id: Optional[str]) -> Optional[str]:
+    """Return normalized selection type."""
+    if document_id:
+        return "document"
+    if dataset_id:
+        return "dataset"
+    return None
+
+
+async def _resolve_selected_resources(
+    db: AsyncSession,
+    conversation_id: UUID,
+    document_id: Optional[str],
+    dataset_id: Optional[str]
+) -> tuple[Optional[str], Optional[str], Dict[str, Any]]:
+    """
+    Resolve selected document/dataset from request or conversation metadata.
+
+    Priority:
+    1. Request payload (`document_id` / `dataset_id`)
+    2. Conversation metadata fallback
+    """
+    if document_id and dataset_id:
+        raise ValueError("Provide only one of 'document_id' or 'dataset_id'.")
+
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conversation = result.scalar_one_or_none()
+
+    if conversation is None:
+        return document_id, dataset_id, {
+            "selected_resource_source": "request" if (document_id or dataset_id) else "none",
+            "selected_resource_type": _selection_type(document_id, dataset_id),
+        }
+
+    conv_meta = conversation.conv_metadata or {}
+    source = "request"
+
+    if document_id:
+        conv_meta["selected_document_id"] = document_id
+        conv_meta.pop("selected_dataset_id", None)
+        conv_meta["selected_resource_type"] = "document"
+    elif dataset_id:
+        conv_meta["selected_dataset_id"] = dataset_id
+        conv_meta.pop("selected_document_id", None)
+        conv_meta["selected_resource_type"] = "dataset"
+    else:
+        document_id = conv_meta.get("selected_document_id")
+        dataset_id = conv_meta.get("selected_dataset_id")
+
+        # Handle legacy/invalid metadata where both were stored.
+        if document_id and dataset_id:
+            if conv_meta.get("selected_resource_type") == "dataset":
+                document_id = None
+            else:
+                dataset_id = None
+
+        source = "conversation" if (document_id or dataset_id) else "none"
+
+    conversation.conv_metadata = conv_meta
+    await db.flush()
+
+    return document_id, dataset_id, {
+        "selected_resource_source": source,
+        "selected_resource_type": _selection_type(document_id, dataset_id),
+    }
+
+
 async def execute_workflow(
     query: str,
     db: AsyncSession,
     document_id: Optional[str] = None,
+    dataset_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None
 ) -> ExecutionResult:
@@ -49,11 +121,11 @@ async def execute_workflow(
     :param query: The user's query
     :param db: Database session
     :param document_id: Optional specific document to query
+    :param dataset_id: Optional specific dataset to analyze
     :param conversation_id: Optional conversation ID for tracking
     :param context: Optional additional context
     :return: ExecutionResult with the response and metadata
     """
-    workflow = get_workflow()
     memory_manager = get_memory_manager()
 
     # Parse conversation_id if provided
@@ -64,6 +136,21 @@ async def execute_workflow(
         db=db,
         conversation_id=conv_uuid
     )
+
+    # Resolve selected resource from request/conversation metadata
+    document_id, dataset_id, selection_meta = await _resolve_selected_resources(
+        db=db,
+        conversation_id=conv_uuid,
+        document_id=document_id,
+        dataset_id=dataset_id
+    )
+
+    # Build route context including selected resources
+    route_context = dict(context or {})
+    if document_id:
+        route_context["document_id"] = document_id
+    if dataset_id:
+        route_context["dataset_id"] = dataset_id
 
     # Get memory context
     memory_context = await memory_manager.get_context_for_query(
@@ -83,8 +170,9 @@ async def execute_workflow(
     initial_state: AgentState = {
         "query": query,
         "document_id": document_id,
+        "dataset_id": dataset_id,
         "conversation_id": str(conv_uuid),
-        "context": context or {},
+        "context": route_context,
         "memory_context": memory_context.to_dict(),
         "conversation_history": conversation_history,
     }
@@ -124,6 +212,8 @@ async def execute_workflow(
             "intent": state.get("intent"),
             "agent_used": state.get("agent_used"),
             "sources": state.get("sources", []),
+            "document_id": document_id,
+            "dataset_id": dataset_id,
         }
     )
 
@@ -140,7 +230,12 @@ async def execute_workflow(
             "routing_reasoning": state.get("routing_reasoning"),
             "conversation_id": str(conv_uuid),
             "document_id": document_id,
+            "dataset_id": dataset_id,
+            **selection_meta,
             "has_history": memory_context.has_history,
+            "analysis_results": state.get("analysis_results"),
+            "analysis_plan": state.get("analysis_plan"),
+            "visualizations": state.get("visualizations", []),
         }
     )
 
@@ -149,6 +244,7 @@ async def execute_workflow_stream(
     query: str,
     db: AsyncSession,
     document_id: Optional[str] = None,
+    dataset_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -175,6 +271,14 @@ async def execute_workflow_stream(
         conversation_id=conv_uuid
     )
 
+    # Resolve selected resource from request/conversation metadata
+    document_id, dataset_id, selection_meta = await _resolve_selected_resources(
+        db=db,
+        conversation_id=conv_uuid,
+        document_id=document_id,
+        dataset_id=dataset_id
+    )
+
     yield {"type": "memory", "status": "loading context...", "conversation_id": str(conv_uuid)}
 
     # Get memory context
@@ -194,7 +298,12 @@ async def execute_workflow_stream(
     initial_state: AgentState = {
         "query": query,
         "document_id": document_id,
+        "dataset_id": dataset_id,
         "conversation_id": str(conv_uuid),
+        "context": {
+            "document_id": document_id,
+            "dataset_id": dataset_id,
+        },
         "memory_context": memory_context.to_dict(),
         "conversation_history": conversation_history,
     }
@@ -241,6 +350,8 @@ async def execute_workflow_stream(
             "intent": state.get("intent"),
             "agent_used": state.get("agent_used"),
             "sources": state.get("sources", []),
+            "document_id": document_id,
+            "dataset_id": dataset_id,
         }
     )
 
@@ -250,5 +361,8 @@ async def execute_workflow_stream(
         "content": response_text,
         "sources": state.get("sources", []),
         "agent_used": state.get("agent_used"),
-        "conversation_id": str(conv_uuid)
+        "conversation_id": str(conv_uuid),
+        "document_id": document_id,
+        "dataset_id": dataset_id,
+        **selection_meta
     }

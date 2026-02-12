@@ -1,10 +1,10 @@
 """Chat routes for agent-based Q&A."""
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.params import Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
 
@@ -15,8 +15,18 @@ from services import agent_executor
 class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
     query: str
+    message: Optional[str] = None  # Backward compatibility with older clients
     document_id: Optional[str] = None
+    dataset_id: Optional[str] = None
     conversation_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_query(cls, data: Any) -> Any:
+        """Map legacy payloads (`message`) to `query`."""
+        if isinstance(data, dict) and not data.get("query") and data.get("message"):
+            data = {**data, "query": data["message"]}
+        return data
 
 
 router = APIRouter(
@@ -39,7 +49,8 @@ async def chat(
     3. Return a response with sources
 
     - **query**: Your question or message
-    - **document_id**: Optional - restrict to a specific document
+    - **document_id**: Optional - restrict to a specific text document
+    - **dataset_id**: Optional - restrict to a specific CSV/Excel dataset
     - **conversation_id**: Optional - for conversation tracking
     """
     try:
@@ -47,6 +58,7 @@ async def chat(
             query=request.query,
             db=db,
             document_id=request.document_id,
+            dataset_id=request.dataset_id,
             conversation_id=request.conversation_id
         )
 
@@ -61,6 +73,8 @@ async def chat(
             "metadata": result.metadata
         }
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -84,6 +98,7 @@ async def chat_stream(
                 query=request.query,
                 db=db,
                 document_id=request.document_id,
+                dataset_id=request.dataset_id,
                 conversation_id=request.conversation_id
             ):
                 yield f"data: {json.dumps(event)}\n\n"

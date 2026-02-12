@@ -14,7 +14,7 @@ class Intent(str, Enum):
     """Possible user intents."""
     DOCUMENT_QUERY = "document_query"      # Questions about document content
     KNOWLEDGE_GRAPH = "knowledge_graph"     # Questions about entity relationships
-    DATA_ANALYSIS = "data_analysis"         # Data/analytics questions (future)
+    DATA_ANALYSIS = "data_analysis"         # Data/analytics questions
     GENERAL = "general"                      # General conversation
 
 
@@ -26,7 +26,7 @@ class RouterDecision(BaseModel):
     entities: list[str] = Field(default_factory=list, description="Key entities extracted from the query")
 
 
-ROUTER_SYSTEM_PROMPT = """You are an intent classifier for a document Q&A system.
+ROUTER_SYSTEM_PROMPT = """You are an intent classifier for a document + dataset assistant.
 
 Analyze the user's query and classify it into one of these intents:
 
@@ -36,11 +36,20 @@ Analyze the user's query and classify it into one of these intents:
 2. **knowledge_graph**: Questions about relationships between concepts/entities.
    Examples: "How is X related to Y?", "What concepts are connected to Z?", "Show me related topics"
 
-3. **data_analysis**: Questions about analyzing data, statistics, or datasets.
-   Examples: "Analyze this data", "What's the correlation?", "Show me trends" (Note: This is for future use)
+3. **data_analysis**: Questions about analyzing data, statistics, datasets, ML, clustering, or classification.
+   Examples: "Analyze this data", "What's the correlation?", "Train a model", "Classify this dataset", "Cluster customers"
 
 4. **general**: General conversation, greetings, or questions not related to documents/data.
    Examples: "Hello", "What can you do?", "Help me understand how to use this"
+
+You will also receive selected resource context (if any):
+- selected_document_id
+- selected_dataset_id
+
+Routing rules with selected resource context:
+- If the query is ambiguous (e.g., "summarize this", "explain it"), prefer `document_query` when a document is selected.
+- If the query asks for analysis/modeling and a dataset is selected, prefer `data_analysis`.
+- Do not force data/document routing for clearly general conversation.
 
 Extract any key entities (concepts, names, topics) mentioned in the query.
 
@@ -66,6 +75,20 @@ class RouterAgent(BaseAgent):
             format_instructions=self.parser.get_format_instructions()
         )
 
+    @staticmethod
+    def _format_selection_context(context: Optional[Dict[str, Any]]) -> str:
+        """Format selected resource hints for the router prompt."""
+        if not context:
+            return "No selected resource."
+
+        lines = []
+        if context.get("document_id"):
+            lines.append(f"selected_document_id: {context['document_id']}")
+        if context.get("dataset_id"):
+            lines.append(f"selected_dataset_id: {context['dataset_id']}")
+
+        return "\n".join(lines) if lines else "No selected resource."
+
     async def invoke(
         self,
         query: str,
@@ -81,15 +104,20 @@ class RouterAgent(BaseAgent):
         :return: AgentResponse containing RouterDecision
         """
         try:
+            selection_context = self._format_selection_context(context)
+
             # Use partial_variables to avoid escaping issues with format_instructions
             prompt = ChatPromptTemplate.from_messages([
                 ("system", ROUTER_SYSTEM_PROMPT),
-                ("user", "{query}")
+                ("user", "Selected resource context:\n{selection_context}\n\nUser query:\n{query}")
             ]).partial(format_instructions=self.parser.get_format_instructions())
 
             chain = prompt | self.llm | self.parser
 
-            decision: RouterDecision = await chain.ainvoke({"query": query})
+            decision: RouterDecision = await chain.ainvoke({
+                "query": query,
+                "selection_context": selection_context
+            })
 
             return AgentResponse(
                 content=decision.intent.value,
@@ -110,12 +138,13 @@ class RouterAgent(BaseAgent):
     async def classify(
         self,
         query: str,
-        db: AsyncSession
+        db: AsyncSession,
+        context: Optional[Dict[str, Any]] = None
     ) -> RouterDecision:
         """
         Convenience method that returns the RouterDecision directly.
         """
-        response = await self.invoke(query, db)
+        response = await self.invoke(query, db, context=context)
 
         if not response.success:
             # Return a default decision on error

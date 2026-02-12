@@ -19,8 +19,13 @@ async def router_node(state: AgentState, db: AsyncSession) -> AgentState:
     Router node that classifies intent and updates state.
     """
     query = state["query"]
+    routing_context = dict(state.get("context") or {})
+    if state.get("document_id"):
+        routing_context["document_id"] = state["document_id"]
+    if state.get("dataset_id"):
+        routing_context["dataset_id"] = state["dataset_id"]
 
-    decision = await router_agent.classify(query, db)
+    decision = await router_agent.classify(query, db, context=routing_context)
 
     return {
         **state,
@@ -144,7 +149,7 @@ async def general_node(state: AgentState, db: AsyncSession) -> AgentState:
 You can help users:
 - Ask questions about uploaded documents
 - Explore relationships in the knowledge graph
-- Analyze data (coming soon)
+- Analyze uploaded datasets, including modeling tasks
 
 Be friendly and helpful. If the user seems to want document-related help,
 guide them on how to upload documents or ask questions."""
@@ -180,10 +185,10 @@ async def data_analysis_node(state: AgentState, db: AsyncSession) -> AgentState:
     from agents.data_scientist_agent import get_data_scientist_agent
 
     query = state["query"]
-    dataset_id = state.get("dataset_id")
+    context = state.get("context", {}) or {}
+    dataset_id = state.get("dataset_id") or context.get("dataset_id")
 
     # Build context for the agent
-    context = {}
     if dataset_id:
         context["dataset_id"] = dataset_id
 
@@ -199,6 +204,7 @@ async def data_analysis_node(state: AgentState, db: AsyncSession) -> AgentState:
         "response": response.content,
         "sources": [],
         "agent_used": "data_scientist_agent",
+        "dataset_id": dataset_id,
         "analysis_results": response.metadata.get("results", {}),
         "visualizations": visualizations,
         "analysis_plan": response.metadata.get("plan", {})

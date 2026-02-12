@@ -36,6 +36,7 @@ class AgentState(TypedDict, total=False):
     # Context
     context: Optional[dict]             # Additional context (e.g., from memory)
     document_id: Optional[str]          # Specific document to query
+    dataset_id: Optional[str]           # Specific dataset to analyze
 
     # Memory context
     memory_context: Optional[Dict[str, Any]]  # Context from memory layers

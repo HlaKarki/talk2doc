@@ -19,6 +19,9 @@ class AnalysisPlan(BaseModel):
     dataset_id: Optional[str] = Field(default=None, description="Dataset ID if mentioned or available in context")
     columns: List[str] = Field(default_factory=list, description="Specific columns mentioned by user")
     visualization_type: Optional[str] = Field(default=None, description="Type of visualization if requested")
+    target_column: Optional[str] = Field(default=None, description="Target/label column for classification")
+    feature_columns: List[str] = Field(default_factory=list, description="Feature columns for ML operations")
+    algorithm: Optional[str] = Field(default=None, description="Algorithm choice, e.g. random_forest, logistic_regression, svm, kmeans")
 
 
 DATA_SCIENTIST_SYSTEM_PROMPT = """You are a Data Scientist Agent that helps users analyze datasets.
@@ -36,6 +39,8 @@ Based on the user's query, determine:
 2. Which tools to use and in what order
 3. Which columns to analyze (if specified)
 4. What visualizations to generate
+5. For classification, choose target_column + feature_columns (+ algorithm if user requested one)
+6. For clustering, choose feature_columns (+ algorithm if user requested one)
 
 Available datasets context:
 {datasets_context}
@@ -117,6 +122,83 @@ class DataScientistAgent(BaseAgent):
             plan.dataset_id = context["dataset_id"]
 
         return plan
+
+    async def _get_dataset_schema(
+        self,
+        dataset_id: str,
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Fetch dataset schema metadata."""
+        from services.data_service import get_data_service
+
+        data_service = get_data_service()
+        dataset = await data_service.get_dataset_by_id(uuid.UUID(dataset_id), db)
+        return dataset.schema if dataset and dataset.schema else {}
+
+    @staticmethod
+    def _get_numeric_columns_from_schema(schema: Dict[str, Any]) -> List[str]:
+        """Extract numeric columns from dataset schema."""
+        numeric_types = {"integer", "float"}
+        return [
+            col.get("name")
+            for col in schema.get("columns", [])
+            if col.get("semantic_type") in numeric_types and col.get("name")
+        ]
+
+    async def _resolve_classification_setup(
+        self,
+        plan: AnalysisPlan,
+        db: AsyncSession
+    ) -> tuple[Optional[str], List[str], str]:
+        """Resolve target/features/algorithm for classification."""
+        schema = await self._get_dataset_schema(plan.dataset_id, db)
+        all_columns = schema.get("column_names", [])
+
+        target = plan.target_column
+        if not target and plan.columns:
+            # Prefer common label-like names if present.
+            priority = {"target", "label", "class", "outcome", "churn", "survived", "y"}
+            target = next((c for c in plan.columns if c.lower() in priority), None)
+            if not target and len(plan.columns) >= 2:
+                target = plan.columns[-1]
+
+        if not target and all_columns:
+            priority = {"target", "label", "class", "outcome", "churn", "survived", "y"}
+            target = next((c for c in all_columns if c.lower() in priority), None)
+
+        feature_columns = list(plan.feature_columns)
+        if not feature_columns and plan.columns:
+            feature_columns = [c for c in plan.columns if c != target]
+
+        if not feature_columns and all_columns and target:
+            feature_columns = [c for c in all_columns if c != target]
+        elif target:
+            feature_columns = [c for c in feature_columns if c != target]
+
+        allowed = {"random_forest", "logistic_regression", "svm"}
+        algorithm = (plan.algorithm or "random_forest").lower()
+        if algorithm not in allowed:
+            algorithm = "random_forest"
+
+        return target, feature_columns, algorithm
+
+    async def _resolve_clustering_features(
+        self,
+        plan: AnalysisPlan,
+        db: AsyncSession
+    ) -> List[str]:
+        """Resolve feature columns for clustering."""
+        if plan.feature_columns:
+            return plan.feature_columns
+        if plan.columns:
+            return plan.columns
+
+        schema = await self._get_dataset_schema(plan.dataset_id, db)
+        numeric_columns = self._get_numeric_columns_from_schema(schema)
+        if numeric_columns:
+            return numeric_columns[:8]
+
+        return schema.get("column_names", [])[:8]
 
     async def _execute_profile(
         self,
@@ -408,8 +490,9 @@ Provide insights based on these results:""")
             }
 
             visualizations = []
+            tools = plan.tools_needed or ["profile"]
 
-            for tool in plan.tools_needed:
+            for tool in tools:
                 if tool == "profile":
                     results["analyses"]["profile"] = await self._execute_profile(
                         plan.dataset_id, db
@@ -438,18 +521,36 @@ Provide insights based on these results:""")
                         }
 
                 elif tool == "cluster":
-                    if plan.columns:
+                    cluster_features = await self._resolve_clustering_features(plan, db)
+                    cluster_algorithm = (plan.algorithm or "kmeans").lower()
+                    if cluster_algorithm not in {"kmeans", "dbscan", "hierarchical"}:
+                        cluster_algorithm = "kmeans"
+                    if cluster_features:
                         results["analyses"]["clustering"] = await self._execute_cluster(
-                            plan.dataset_id, plan.columns, db
+                            plan.dataset_id, cluster_features, db, algorithm=cluster_algorithm
                         )
                     else:
                         results["analyses"]["clustering"] = {
-                            "note": "No columns specified, will use all numeric columns"
+                            "error": "Could not determine feature columns for clustering"
                         }
-                        # Get profile to find numeric columns
-                        profile = await self._execute_profile(plan.dataset_id, db)
-                        results["analyses"]["clustering"] = await self._execute_cluster(
-                            plan.dataset_id, [], db  # Empty list = use all numeric
+
+                elif tool == "classify":
+                    target_column, feature_columns, algorithm = await self._resolve_classification_setup(plan, db)
+                    if not target_column:
+                        results["analyses"]["classification"] = {
+                            "error": "Could not determine target column for classification. Please specify it."
+                        }
+                    elif not feature_columns:
+                        results["analyses"]["classification"] = {
+                            "error": "Could not determine feature columns for classification. Please specify them."
+                        }
+                    else:
+                        results["analyses"]["classification"] = await self._execute_classify(
+                            plan.dataset_id,
+                            target_column=target_column,
+                            feature_columns=feature_columns,
+                            db=db,
+                            algorithm=algorithm
                         )
 
                 elif tool == "visualize":
@@ -463,6 +564,11 @@ Provide insights based on these results:""")
                     if "figure" in viz_result:
                         visualizations.append(viz_result)
 
+                else:
+                    results["analyses"][f"unsupported_{tool}"] = {
+                        "error": f"Unsupported tool requested by planner: {tool}"
+                    }
+
             # Step 3: Generate insights
             insights = await self._generate_insights(query, results, plan)
 
@@ -471,7 +577,7 @@ Provide insights based on these results:""")
                 "agent": self.name,
                 "plan": plan.model_dump(),
                 "results": results,
-                "tools_executed": plan.tools_needed
+                "tools_executed": tools
             }
 
             if visualizations:
