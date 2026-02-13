@@ -145,33 +145,3 @@ bun run test
 ```
 
 Backend includes integration-style test scripts under `backend/tests/` that are intended to run against a configured backend environment.
-
-Hey Vishal Bhaiya,
-
-Quick update - I completed all three courses you recommended. To make sure the concepts stuck, I built a project called
-Talk2Doc that implements most of what I learned.
-
-What I implemented:
-
-- Multi-agent orchestration with LangGraph - Router agent classifies user intent, routes to specialized agents (document,
-  knowledge graph, data scientist), then a synthesizer agent refines the final response
-- 4-layer memory system - Short-term (conversation buffer), long-term (user facts/preferences), semantic (vector
-  similarity search on past interactions), and graph-based memory (concept relationships)
-- Knowledge graph extraction - Using LangChain's LLMGraphTransformer to extract entities/relationships from documents,
-  with NetworkX for traversal and pathfinding
-- RAG pipeline - Chunking, embeddings, vector search, reranking, and streaming responses
-- Data scientist agent - Dataset profiling, NLP analysis (sentiment/keywords with TF-IDF), supervised learning (Random
-  Forest, Logistic Regression, SVM), unsupervised learning (K-Means, DBSCAN, Hierarchical clustering), and auto-generated
-  visualizations
-
-The stack is FastAPI + React, deployed to Cloudflare (Workers for frontend, Containers for backend).
-
-It's still a buggy MVP - definitely some rough edges - but the core flows work. Here are the links if you want to poke
-around:
-- Backend API (Swagger): link1
-- Live site: link2
-
-Thanks again for the course recommendations - they gave me exactly the foundation I needed to build something like this.
-
-Best,
-Kshap
