@@ -4,14 +4,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import documents, knowledge_graph, chat, conversations, memory, datasets, models
 from database.session import init_db
+from core.config import config
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown."""
-    # Startup: Initialize database
-    await init_db()
-    print("✅ Database initialized")
+    # Startup: optionally initialize schema for local/dev environments.
+    if config.auto_init_db:
+        await init_db()
+        print("✅ Database initialized")
+    else:
+        print("ℹ️ Skipping automatic DB init (AUTO_INIT_DB=false)")
 
     yield
 
@@ -27,10 +31,18 @@ app = FastAPI(
 )
 
 # CORS
+configured_origins = [
+    origin.strip() for origin in config.cors_origins.split(",") if origin.strip()
+]
+if not configured_origins:
+    configured_origins = ["http://localhost:3000"]
+
+allow_all_origins = "*" in configured_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all_origins else configured_origins,
+    allow_credentials=not allow_all_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

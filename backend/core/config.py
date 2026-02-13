@@ -7,6 +7,8 @@ class Config(BaseSettings):
     """Load environment variables using pydantic-settings"""
     database_url: str
     openai_api_key: str
+    cors_origins: str = "http://localhost:3000"
+    auto_init_db: bool = True
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
 

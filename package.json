@@ -7,7 +7,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy": "bun run build && wrangler deploy"
+    "deploy": "bun run build && wrangler deploy",
+    "deploy:backend": "wrangler deploy -c backend/wrangler.containers.jsonc",
+    "deploy:backend:check": "wrangler whoami"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.13.8",
@@ -37,6 +39,7 @@
     "zod": "^4.1.11"
   },
   "devDependencies": {
+    "@cloudflare/containers": "^0.1.0",
     "@tanstack/devtools-vite": "^0.3.11",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.2.0",

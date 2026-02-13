@@ -101,10 +101,29 @@ type ContextSelection = {
   label: string
 }
 
+function resolveDefaultBackendUrl(): string {
+  if (import.meta.env.DEV) {
+    return 'http://localhost:8000'
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location
+    if (hostname.endsWith('.workers.dev')) {
+      const hostParts = hostname.split('.')
+      if (hostParts.length >= 3) {
+        const suffix = hostParts.slice(1).join('.')
+        return `${protocol}//talk2doc-backend.${suffix}`
+      }
+    }
+  }
+
+  return 'http://localhost:8000'
+}
+
 const API_BASE_URL =
   (import.meta.env.VITE_BACKEND_URL as string | undefined) ??
   (import.meta.env.SERVER_URL as string | undefined) ??
-  'http://localhost:8000'
+  resolveDefaultBackendUrl()
 
 const PLOTLY_SCRIPT_ID = 'plotly-cdn-script'
 const PLOTLY_SCRIPT_SRC = 'https://cdn.plot.ly/plotly-2.35.2.min.js'

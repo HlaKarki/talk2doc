@@ -1,0 +1,38 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "talk2doc-backend",
+  "main": "cloudflare/container-worker.js",
+  "compatibility_date": "2026-02-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "containers": [
+    {
+      "class_name": "Talk2DocBackendContainer",
+      "image": "./Dockerfile",
+      "instance_type": "standard-2",
+      "max_instances": 3
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TALK2DOC_BACKEND",
+        "class_name": "Talk2DocBackendContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Talk2DocBackendContainer"]
+    }
+  ],
+  "vars": {
+    "EMBEDDING_MODEL": "text-embedding-3-small",
+    "EMBEDDING_DIMENSIONS": "1536",
+    "CHUNK_SIZE": "1000",
+    "CHUNK_OVERLAP": "200",
+    "R2_BUCKET_NAME": "talk2doc",
+    "CORS_ORIGINS": "*",
+    "AUTO_INIT_DB": "false"
+  }
+}
