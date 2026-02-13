@@ -73,5 +73,5 @@ Expected:
 ## Notes
 
 - Container instances are ephemeral. Persistent state should stay in Postgres/R2.
-- The Worker bridge uses `getRandom()` for stateless API load distribution.
+- The Worker bridge currently uses a stable named container (`api-default`) via `getContainer(...)`.
 - CORS is now environment-driven via `CORS_ORIGINS` (comma-separated list).
