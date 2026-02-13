@@ -1,7 +1,7 @@
 # Talk2Doc
 
 > ### **Disclaimer**
-> 
+>
 > This project is not polished and is currently buggy in multiple areas.
 > Expect rough edges, incomplete flows, and behavior changes at this stage.
 
